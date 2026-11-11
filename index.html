@@ -1,0 +1,628 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Osmose 習作</title>
+<style>
+  :root { --fg: #dfe8ef; --dim: #8fa3b3; --accent: #7fe0cf; --bg: #000; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font-family: -apple-system, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif; overflow: hidden; }
+  canvas { display: block; }
+  #panel { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(ellipse at center, rgba(4,14,22,.55), rgba(0,0,0,.92)); padding: 16px; box-sizing: border-box; }
+  .card { max-width: 560px; width: 100%; line-height: 1.7; }
+  h1 { font-weight: 300; letter-spacing: .12em; margin: 0 0 4px; font-size: 30px; }
+  .sub { color: var(--dim); margin: 0 0 24px; font-size: 14px; }
+  p { margin: 0 0 14px; }
+  ul { margin: 0 0 20px; padding-left: 1.2em; color: var(--fg); }
+  li { margin-bottom: 6px; }
+  button { font: inherit; font-size: 17px; padding: 12px 22px; border-radius: 999px; border: 1px solid var(--accent);
+    background: rgba(127,224,207,.12); color: var(--fg); cursor: pointer; margin: 6px 8px 6px 0; }
+  button.ghost { border-color: #456; background: transparent; color: var(--dim); font-size: 15px; }
+  button:disabled { opacity: .4; cursor: default; }
+  #meter { height: 10px; background: #122630; border-radius: 5px; overflow: hidden; margin: 10px 0 18px; }
+  #meter > div { height: 100%; width: 0; background: var(--accent); transition: width .05s linear; }
+  #calMsg { min-height: 3.4em; }
+  .note { color: var(--dim); font-size: 13px; }
+  [hidden] { display: none !important; }
+</style>
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+</head>
+<body>
+<div id="panel"><div class="card">
+  <h1>Osmose 習作</h1>
+  <p class="sub">向 Char Davies《Osmose》（1995）致敬的呼吸式 VR · 約 5 分鐘</p>
+
+  <div id="stepIntro">
+    <ul>
+      <li><b>身體輕輕前傾、後仰或側傾</b>，就會往那個方向漂。</li>
+      <li><b>用嘴巴慢慢吐氣</b>會下沉；停下來吸氣，肺裡充滿空氣，就會慢慢浮起。</li>
+      <li>請站著體驗，周圍留一點空間，不用走動。</li>
+    </ul>
+    <button id="btnMic">開始：允許麥克風</button>
+    <button id="btnNoMic" class="ghost">沒有麥克風，改用扳機代替吐氣</button>
+  </div>
+
+  <div id="stepCal" hidden>
+    <p id="calMsg"></p>
+    <div id="meter"><div></div></div>
+    <button id="btnRetry" hidden>重新校準</button>
+  </div>
+
+  <div id="stepReady" hidden>
+    <p id="readyMsg">校準完成。試著吐一口氣，看上面的光條會不會亮起。</p>
+    <button id="btnVR" disabled>進入 VR</button>
+    <button id="btnPreview" class="ghost" hidden>電腦預覽（除錯用）</button>
+    <p id="xrMsg" class="note"></p>
+  </div>
+
+  <div id="stepEnd" hidden>
+    <p>體驗結束。謝謝你的呼吸。</p>
+    <button onclick="location.reload()">再體驗一次</button>
+  </div>
+</div></div>
+
+<script type="module" id="osmose-src">
+import * as THREE from 'three';
+
+// ---------- 基本設定 ----------
+const DEBUG = new URLSearchParams(location.search).has('debug');
+const TOTAL = 300;          // 總長 5 分鐘
+const ENDING = 270;         // 最後 30 秒自動上浮、淡出
+const START = new THREE.Vector3(0, 6, 38);
+const EYE_MIN = -88, EYE_MAX = 72, WORLD_R = 50;
+
+let seed = 1995;
+function rnd() { // mulberry32：固定種子，每次世界長得一樣
+  seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+const rand = (a, b) => a + (b - a) * rnd();
+const hsl = (h, s, l) => new THREE.Color().setHSL(h, s, l);
+const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+
+// ---------- 場景 ----------
+const renderer = new THREE.WebGLRenderer({ antialias: false });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.xr.enabled = true;
+renderer.xr.setReferenceSpaceType('local-floor');
+renderer.xr.setFoveation(1);
+document.body.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x000000);
+scene.fog = new THREE.Fog(0x000000, 3, 38);
+const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.05, 400);
+camera.position.set(0, 1.6, 0);
+camera.rotation.order = 'YXZ';
+const rig = new THREE.Group();
+rig.position.copy(START);
+rig.add(camera);
+scene.add(rig);
+
+addEventListener('resize', () => {
+  if (renderer.xr.isPresenting) return;
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight); updatePixelScale();
+});
+
+// ---------- 柔焦光點材質（sfumato） ----------
+const U = { uTime: { value: 0 }, uPixel: { value: 600 } };
+function updatePixelScale() {
+  U.uPixel.value = renderer.xr.isPresenting ? 820
+    : innerHeight / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)));
+}
+updatePixelScale();
+
+const VS = `
+uniform float uTime, uPixel, uFar, uDrift, uMaxSize;
+uniform float uBox, uYMin, uYMax;
+attribute float aSize; attribute float aPhase; attribute vec3 aColor;
+varying vec3 vColor; varying float vAlpha;
+void main() {
+  vec3 p = position + uDrift * vec3(sin(uTime*0.31 + aPhase*7.0), sin(uTime*0.23 + aPhase*5.0), cos(uTime*0.27 + aPhase*3.0));
+  float band = 1.0;
+#ifdef WRAP
+  // 光點在體驗者周圍的方盒裡循環，任何位置都保持相同密度
+  p = cameraPosition + mod(p - cameraPosition + 0.5 * uBox, uBox) - 0.5 * uBox;
+  band = smoothstep(uYMin, uYMin + 4.0, p.y) * (1.0 - smoothstep(uYMax - 4.0, uYMax, p.y));
+#endif
+  vec4 mv = modelViewMatrix * vec4(p, 1.0);
+  float d = max(-mv.z, 0.05);
+  gl_Position = projectionMatrix * mv;
+  gl_PointSize = clamp(2.4 * aSize * uPixel / d, 1.5, uMaxSize);
+  float tw = 0.7 + 0.3 * sin(uTime*1.3 + aPhase*20.0);
+  vAlpha = band * tw * smoothstep(0.15, 1.2, d) * (1.0 - smoothstep(uFar*0.35, uFar, d));
+  vColor = aColor * 2.2;
+}`;
+const FS = `
+uniform float uOpacity; varying vec3 vColor; varying float vAlpha;
+void main() {
+  float r = length(gl_PointCoord - 0.5);
+  float a = 1.0 - smoothstep(0.0, 0.5, r); a = a * (0.4 + 0.6 * a);
+  if (a < 0.01) discard;
+  gl_FragColor = vec4(vColor, a * vAlpha * uOpacity);
+}`;
+function pointMat({ opacity = 1, far = 42, drift = 0.04, maxSize = 48, wrap = null } = {}) {
+  return new THREE.ShaderMaterial({
+    defines: wrap ? { WRAP: '' } : {},
+    uniforms: { uTime: U.uTime, uPixel: U.uPixel, uOpacity: { value: opacity }, uFar: { value: wrap ? wrap.box / 2 : far },
+      uDrift: { value: drift }, uMaxSize: { value: maxSize },
+      uBox: { value: wrap ? wrap.box : 1 }, uYMin: { value: wrap ? wrap.y0 : 0 }, uYMax: { value: wrap ? wrap.y1 : 0 } },
+    vertexShader: VS, fragmentShader: FS,
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  });
+}
+class Pts {
+  constructor() { this.p = []; this.c = []; this.s = []; this.ph = []; }
+  add(x, y, z, col, size) { this.p.push(x, y, z); this.c.push(col.r, col.g, col.b); this.s.push(size); this.ph.push(rnd()); }
+  build(mat) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(this.p, 3));
+    g.setAttribute('aColor', new THREE.Float32BufferAttribute(this.c, 3));
+    g.setAttribute('aSize', new THREE.Float32BufferAttribute(this.s, 1));
+    g.setAttribute('aPhase', new THREE.Float32BufferAttribute(this.ph, 1));
+    const m = new THREE.Points(g, mat); m.frustumCulled = false; scene.add(m); return m;
+  }
+}
+const randInSphere = (r) => { let v; do { v = new THREE.Vector3(rand(-1, 1), rand(-1, 1), rand(-1, 1)); } while (v.lengthSq() > 1); return v.multiplyScalar(r); };
+
+// ---------- 樹（由光點組成的枝幹與葉） ----------
+const bark = new Pts(), leaves = new Pts(), roots = new Pts();
+function branch(set, leafSet, from, dir, len, depth, o) {
+  const n = Math.max(3, Math.floor(len * o.density));
+  const size = o.barkSize * (1 - depth / (o.maxDepth + 2));
+  for (let i = 0; i < n; i++) {
+    const t = i / n, j = o.jitter * (1 - t * 0.5);
+    set.add(from.x + dir.x * len * t + rand(-j, j), from.y + dir.y * len * t + rand(-j, j),
+      from.z + dir.z * len * t + rand(-j, j), o.barkCol(), size);
+  }
+  const end = from.clone().addScaledVector(dir, len);
+  if (depth >= o.maxDepth) {
+    if (leafSet) for (let k = 0; k < o.leafCount; k++) {
+      const v = randInSphere(o.leafR).add(end); leafSet.add(v.x, v.y, v.z, o.leafCol(), o.leafSize);
+    }
+    return;
+  }
+  const kids = 2 + (rnd() < 0.5 ? 1 : 0);
+  for (let k = 0; k < kids; k++) {
+    const nd = dir.clone().add(randInSphere(o.spread)); nd.y += o.bias; nd.normalize();
+    branch(set, leafSet, end, nd, len * rand(0.62, 0.8), depth + 1, o);
+  }
+}
+const barkCol = () => hsl(rand(0.07, 0.12), 0.3, rand(0.22, 0.34));
+const leafCol = () => hsl(rand(0.2, 0.38), 0.75, rand(0.3, 0.5));
+const rootCol = () => hsl(rand(0.08, 0.13), 0.55, rand(0.3, 0.42));
+function tree(x, z, trunk, maxDepth, leafCount, rootDepth) {
+  const base = new THREE.Vector3(x, 0, z);
+  branch(bark, leaves, base, new THREE.Vector3(rand(-.1, .1), 1, rand(-.1, .1)).normalize(), trunk, 0,
+    { density: 22, jitter: 0.16, barkSize: 0.13, barkCol, maxDepth, spread: 0.8, bias: 0.25,
+      leafCount, leafR: trunk * 0.18, leafCol, leafSize: 0.07 });
+  branch(roots, null, base, new THREE.Vector3(0, -1, 0), trunk * 0.7, 0,
+    { density: 12, jitter: 0.08, barkSize: 0.07, barkCol: rootCol, maxDepth: rootDepth, spread: 1.0, bias: -0.35 });
+}
+tree(0, 0, 7, 5, 40, 5);                       // 中央的大樹
+const POND = new THREE.Vector3(-16, 0, 6);
+for (let i = 0; i < 14; i++) {
+  const a = (i / 14) * Math.PI * 2 + rand(-.2, .2), r = rand(16, 45);
+  const x = Math.cos(a) * r, z = Math.sin(a) * r;
+  if (Math.hypot(x - POND.x, z - POND.z) < 9 || Math.hypot(x - START.x, z - START.z) < 8) continue;
+  tree(x, z, rand(3, 5), 4, 18, 3);
+}
+bark.build(pointMat({ opacity: 0.9 }));
+leaves.build(pointMat({ opacity: 0.8, drift: 0.08 }));
+roots.build(pointMat({ opacity: 0.9, far: 36 }));
+
+// 地面、池塘、露珠、昆蟲群
+const ground = new Pts(), pond = new Pts(), dew = new Pts(), insects = new Pts();
+for (let i = 0; i < 9000; i++) {
+  const a = rand(0, Math.PI * 2), r = Math.sqrt(rnd()) * 48, x = Math.cos(a) * r, z = Math.sin(a) * r;
+  if (Math.hypot(x - POND.x, z - POND.z) < 6.5) continue;
+  ground.add(x, rand(0, 0.25), z, hsl(rand(0.25, 0.35), 0.5, rand(0.08, 0.16)), 0.06);
+}
+for (let i = 0; i < 3500; i++) {
+  const a = rand(0, Math.PI * 2), r = Math.sqrt(rnd()) * 6;
+  pond.add(POND.x + Math.cos(a) * r, 0.03, POND.z + Math.sin(a) * r, hsl(rand(0.52, 0.58), 0.8, rand(0.25, 0.5)), 0.05);
+}
+for (let i = 0; i < 700; i++) {
+  const a = rand(0, Math.PI * 2), r = Math.sqrt(rnd()) * 40;
+  dew.add(Math.cos(a) * r, rand(0.3, 8), Math.sin(a) * r, hsl(rand(0.45, 0.55), 0.6, 0.75), 0.06);
+}
+for (let i = 0; i < 1500; i++) {
+  const v = randInSphere(1).normalize().multiplyScalar(rand(5, 8));
+  insects.add(v.x, 10 + v.y * 0.6, v.z, hsl(rand(0.12, 0.16), 0.9, 0.6), 0.035);
+}
+ground.build(pointMat({ opacity: 0.8 }));
+pond.build(pointMat({ opacity: 0.9, drift: 0.05 }));
+dew.build(pointMat({ opacity: 1, drift: 0.35 }));
+insects.build(pointMat({ opacity: 0.9, drift: 1.2 }));
+
+// 雲
+const clouds = new Pts();
+for (let c = 0; c < 26; c++) {
+  const a = rand(0, Math.PI * 2), r = Math.sqrt(rnd()) * 42;
+  const cx = Math.cos(a) * r, cy = rand(26, 44), cz = Math.sin(a) * r;
+  for (let i = 0; i < 70; i++) {
+    const v = randInSphere(1);
+    clouds.add(cx + v.x * 7, cy + v.y * 2.5, cz + v.z * 7, hsl(0.58, 0.15, rand(0.45, 0.65)), rand(2, 5));
+  }
+}
+clouds.build(pointMat({ opacity: 0.12, far: 60, drift: 0.6, maxSize: 380 }));
+
+// 地底：土壤、岩石、礦物
+const soil = new Pts(), rocks = new Pts(), minerals = new Pts();
+const BOX = 36, inBox = () => [rand(0, BOX), rand(0, BOX), rand(0, BOX)];
+for (let i = 0; i < 6000; i++) { const [x, y, z] = inBox(); soil.add(x, y, z, hsl(rand(0.06, 0.09), 0.45, rand(0.12, 0.24)), 0.07); }
+for (let k = 0; k < 22; k++) {
+  const a = rand(0, Math.PI * 2), r = Math.sqrt(rnd()) * 40;
+  const c = new THREE.Vector3(Math.cos(a) * r, rand(-22, -3), Math.sin(a) * r);
+  const s = new THREE.Vector3(rand(1.5, 4), rand(1, 2.5), rand(1.5, 4));
+  for (let i = 0; i < 420; i++) {
+    const v = randInSphere(1).normalize().multiply(s).add(c);
+    rocks.add(v.x, v.y, v.z, hsl(0.08, 0.1, rand(0.28, 0.42)), 0.08);
+  }
+}
+for (let i = 0; i < 900; i++) { const [x, y, z] = inBox(); minerals.add(x, y, z, hsl(rand(0.1, 0.14), 0.9, 0.6), 0.04); }
+soil.build(pointMat({ opacity: 0.8, wrap: { box: BOX, y0: -28, y1: -0.5 } }));
+rocks.build(pointMat({ opacity: 0.8, far: 34 }));
+minerals.build(pointMat({ opacity: 1, drift: 0.05, wrap: { box: BOX, y0: -28, y1: -0.5 } }));
+
+// 深海：浮游光點與環狀微生物
+const plankton = new Pts(), micro = new Pts();
+for (let i = 0; i < 9000; i++) { const [x, y, z] = inBox(); plankton.add(x, y, z, hsl(rand(0.5, 0.6), 0.75, rand(0.28, 0.5)), 0.05); }
+for (let k = 0; k < 600; k++) {
+  const a = rand(0, Math.PI * 2), r = Math.sqrt(rnd()) * 44;
+  const c = new THREE.Vector3(Math.cos(a) * r, rand(-70, -32), Math.sin(a) * r);
+  const n = randInSphere(1).normalize();
+  const u = new THREE.Vector3().crossVectors(n, Math.abs(n.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0)).normalize();
+  const w = new THREE.Vector3().crossVectors(n, u);
+  const rr = rand(0.3, 1.2), col = hsl(rand(0.45, 0.85), 0.6, 0.55);
+  for (let i = 0; i < 16; i++) {
+    const t = (i / 16) * Math.PI * 2;
+    const p = c.clone().addScaledVector(u, Math.cos(t) * rr).addScaledVector(w, Math.sin(t) * rr);
+    micro.add(p.x, p.y, p.z, col, 0.05);
+  }
+}
+plankton.build(pointMat({ opacity: 0.85, drift: 0.6, wrap: { box: BOX, y0: -76, y1: -29 } }));
+micro.build(pointMat({ opacity: 1, far: 30, drift: 0.4 }));
+
+// ---------- 起點的笛卡兒網格 ----------
+const gridPos = [], GS = 3, GN = 4;
+const gc = START.clone().add(new THREE.Vector3(0, 1.6, 0));
+for (let i = -GN; i <= GN; i++) for (let j = -GN; j <= GN; j++) {
+  const a = i * GS, b = j * GS, e = GN * GS;
+  gridPos.push(gc.x - e, gc.y + a, gc.z + b, gc.x + e, gc.y + a, gc.z + b);
+  gridPos.push(gc.x + a, gc.y - e, gc.z + b, gc.x + a, gc.y + e, gc.z + b);
+  gridPos.push(gc.x + a, gc.y + b, gc.z - e, gc.x + a, gc.y + b, gc.z + e);
+}
+const gridGeo = new THREE.BufferGeometry();
+gridGeo.setAttribute('position', new THREE.Float32BufferAttribute(gridPos, 3));
+const gridMat = new THREE.LineBasicMaterial({ color: 0x9fd8ff, transparent: true, opacity: 0.45, depthWrite: false });
+scene.add(new THREE.LineSegments(gridGeo, gridMat));
+
+// ---------- 文字層與程式碼層 ----------
+function textTexture(lines, { w = 1024, h = 1024, font = '26px Menlo, monospace', color = 'rgba(130,255,210,0.9)', lh = 34, center = false } = {}) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const g = c.getContext('2d'); g.font = font; g.fillStyle = color; g.textBaseline = 'top';
+  g.textAlign = center ? 'center' : 'left';
+  lines.forEach((l, i) => g.fillText(l, center ? w / 2 : 20, (center ? (h - lh * lines.length) / 2 : 20) + i * lh));
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
+// 程式碼層：用這個作品自己的原始碼，揭露幻覺的來源
+const src = document.getElementById('osmose-src').textContent.split('\n').map(s => s.replace(/\t/g, '  ')).filter(s => s.trim());
+function codeRing(y, radius, size, count, offset) {
+  for (let k = 0; k < count; k++) {
+    const start = ((k + offset) * 28) % Math.max(1, src.length - 28);
+    const tex = textTexture(src.slice(start, start + 28).map(s => s.slice(0, 64)));
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(size, size),
+      new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.6, depthWrite: false, side: THREE.DoubleSide }));
+    const a = (k / count) * Math.PI * 2;
+    m.position.set(Math.cos(a) * radius, y + rand(-2, 2), Math.sin(a) * radius);
+    m.lookAt(0, m.position.y, 0);
+    scene.add(m);
+  }
+}
+codeRing(-82, 20, 12, 10, 0);
+codeRing(69, 18, 8, 8, 5);
+
+const PHRASES = ['呼吸', '浮', '沉', '霧', '慢', '光在水裡慢慢說話', '根在黑暗中聆聽', '身體即介面', '裡 / 外', '心 / 身',
+  '我在這裡', '一片葉子的內部', '水記得光', '吐氣，下沉', '吸氣，浮起', '座標正在溶解', '你看見的，都是你移動出來的',
+  '這不是自然，是自然的影子', 'breath', 'earth', 'water', 'leaf', 'cloud', 'inside / outside', 'drift', 'stillness', 'being here'];
+PHRASES.forEach((p, i) => {
+  const tex = textTexture([p], { w: 1024, h: 160, font: '64px "PingFang TC", "Noto Sans TC", sans-serif', color: 'rgba(225,235,245,0.92)', lh: 80, center: true });
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+  const a = rand(0, Math.PI * 2), r = rand(3, 30);
+  s.position.set(Math.cos(a) * r, rand(49, 64), Math.sin(a) * r);
+  const sc = rand(5, 9); s.scale.set(sc, sc * 160 / 1024, 1);
+  scene.add(s);
+});
+
+// ---------- 頭盔前方的提示與淡入淡出 ----------
+const hintTex = (t) => textTexture(t, { w: 1024, h: 256, font: '44px "PingFang TC", "Noto Sans TC", sans-serif', color: 'rgba(230,240,245,0.95)', lh: 64, center: true });
+const HINTS = [
+  hintTex(['身體輕輕前傾、後仰或側傾', '就會往那個方向漂']),
+  hintTex(['用嘴巴慢慢吐氣，會下沉', '停下來吸氣，就會慢慢浮起']),
+  hintTex(['按住扳機代替吐氣，會下沉', '放開就會慢慢浮起']),
+];
+const hintMat = new THREE.SpriteMaterial({ map: HINTS[0], transparent: true, opacity: 0, depthTest: false, depthWrite: false, fog: false });
+const hint = new THREE.Sprite(hintMat);
+hint.scale.set(1.6, 0.4, 1); hint.position.set(0, -0.15, -2); hint.renderOrder = 1000;
+camera.add(hint);
+const veilMat = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide, transparent: true, opacity: 1, depthTest: false, depthWrite: false, fog: false });
+const veil = new THREE.Mesh(new THREE.SphereGeometry(0.3, 16, 12), veilMat);
+veil.renderOrder = 9999; camera.add(veil);
+
+// ---------- 依高度變化的天色 ----------
+const SKY = [[72, 0x07080f], [58, 0x0c1020], [35, 0x27313d], [14, 0x0b1a16], [2, 0x06110d], [-4, 0x0c0805],
+  [-24, 0x0a0603], [-32, 0x03152a], [-70, 0x010812], [-82, 0x000000]].map(([y, c]) => [y, new THREE.Color(c)]);
+function skyAt(y, out) {
+  if (y >= SKY[0][0]) return out.copy(SKY[0][1]);
+  for (let i = 0; i < SKY.length - 1; i++) {
+    const [y0, c0] = SKY[i], [y1, c1] = SKY[i + 1];
+    if (y <= y0 && y >= y1) return out.copy(c0).lerp(c1, (y0 - y) / (y0 - y1));
+  }
+  return out.copy(SKY[SKY.length - 1][1]);
+}
+
+// ---------- 聲音 ----------
+let actx = null, bus = null, master = null, analyser = null, freqBuf = null, micOK = false;
+const layers = {};
+const ZONES = { text: [57, 10], cloud: [35, 9], forest: [6, 9], earth: [-13, 8], ocean: [-50, 18], code: [-80, 8] };
+function zoneWeight(name, y) {
+  const [c, w] = ZONES[name]; let v = Math.exp(-(((y - c) / w) ** 2));
+  if (name === 'code') v = Math.max(v, Math.exp(-(((y - 69) / 5) ** 2)));
+  return v;
+}
+function initAudio() {
+  actx = new (window.AudioContext || window.webkitAudioContext)();
+  master = actx.createGain(); master.gain.value = 0;
+  const lp = actx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 750;  // 輸出保持低頻，避免被麥克風當成吐氣
+  master.connect(lp).connect(actx.destination);
+  bus = actx.createGain();
+  const verb = actx.createConvolver();
+  const len = actx.sampleRate * 3.5, ir = actx.createBuffer(2, len, actx.sampleRate);
+  for (let ch = 0; ch < 2; ch++) { const d = ir.getChannelData(ch); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3); }
+  verb.buffer = ir;
+  const wet = actx.createGain(); wet.gain.value = 0.5;
+  bus.connect(master); bus.connect(verb).connect(wet).connect(master);
+
+  const drone = (freqs, type, vol) => {
+    const g = actx.createGain(); g.gain.value = 0;
+    freqs.forEach((f, i) => {
+      const o = actx.createOscillator(); o.type = type; o.frequency.value = f; o.detune.value = i % 2 ? 5 : -5;
+      const og = actx.createGain(); og.gain.value = vol / freqs.length;
+      const l = actx.createOscillator(); l.frequency.value = 0.04 + Math.random() * 0.08;
+      const lg = actx.createGain(); lg.gain.value = 0.5 * vol / freqs.length;
+      l.connect(lg).connect(og.gain); o.connect(og).connect(g); o.start(); l.start();
+    });
+    g.connect(bus); return g;
+  };
+  const noise = (type, freq, q, vol, lfo) => {
+    const b = actx.createBuffer(1, actx.sampleRate * 2, actx.sampleRate), d = b.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    const s = actx.createBufferSource(); s.buffer = b; s.loop = true;
+    const f = actx.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q;
+    if (lfo) { const l = actx.createOscillator(); l.frequency.value = 0.08; const lg = actx.createGain(); lg.gain.value = freq * 0.5; l.connect(lg).connect(f.frequency); l.start(); }
+    const g = actx.createGain(); g.gain.value = 0; const v = actx.createGain(); v.gain.value = vol;
+    s.connect(f).connect(v).connect(g); g.connect(bus); s.start(); return g;
+  };
+  layers.text = [drone([220, 277.2, 330], 'sine', 0.35)];
+  layers.cloud = [drone([196, 293.7], 'sine', 0.3), noise('bandpass', 350, 0.7, 0.25)];
+  layers.forest = [drone([110, 164.8, 246.9], 'triangle', 0.3)];
+  layers.earth = [drone([55, 82.4], 'sine', 0.6), noise('lowpass', 120, 0.5, 0.5)];
+  layers.ocean = [drone([73.4, 110], 'sine', 0.45), noise('lowpass', 280, 0.6, 0.45, true)];
+  layers.code = [drone([49, 98, 147], 'square', 0.12)];
+}
+function blip(f0, f1, dur, vol) {
+  const o = actx.createOscillator(), g = actx.createGain(), t = actx.currentTime;
+  o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + dur * 0.3);
+  g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(vol, t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g).connect(bus); o.start(t); o.stop(t + dur + 0.05);
+}
+const PENTA = [130.8, 146.8, 164.8, 196, 220, 261.6, 293.7, 329.6];
+
+// ---------- 麥克風：只偵測吐氣的氣流聲（1–6 kHz） ----------
+const breath = { floor: -90, peak: -60, level: 0 };
+function micDb() {
+  if (!analyser) return -120;
+  analyser.getFloatFrequencyData(freqBuf);
+  const hz = actx.sampleRate / analyser.fftSize, a = Math.floor(1000 / hz), b = Math.floor(6000 / hz);
+  let s = 0; for (let i = a; i <= b; i++) s += Math.pow(10, freqBuf[i] / 10);
+  return 10 * Math.log10(s / (b - a + 1) + 1e-20);
+}
+async function initMic() {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: false, autoGainControl: false } });
+  analyser = actx.createAnalyser(); analyser.fftSize = 1024; analyser.smoothingTimeConstant = 0.3;
+  actx.createMediaStreamSource(stream).connect(analyser);
+  freqBuf = new Float32Array(analyser.frequencyBinCount);
+  micOK = true;
+}
+let calibrating = false;
+function updateBreath(dt) {
+  let raw = 0;
+  if (micOK) {
+    const db = micDb();
+    raw = calibrating ? Math.min(1, Math.max(0, (db + 100) / 60))
+      : Math.min(1, Math.max(0, (db - breath.floor - 3) / Math.max(3, breath.peak - breath.floor - 3)));
+  }
+  if (DEBUG && keys[' ']) raw = 1;
+  const session = renderer.xr.getSession();
+  if (session) for (const src of session.inputSources) {
+    const b = src.gamepad && src.gamepad.buttons[0]; if (b && b.value > 0.1) raw = Math.max(raw, b.value);
+  }
+  const tau = raw > breath.level ? 0.08 : 0.25;
+  breath.level += (raw - breath.level) * (1 - Math.exp(-dt / tau));
+}
+
+// ---------- 移動：傾身＝水平漂移；吐氣＝肺變空而下沉 ----------
+const state = { ref: new THREE.Vector3(), vel: new THREE.Vector3(), lungs: 0.62 };
+const keys = {};
+addEventListener('keydown', (e) => { keys[e.key.toLowerCase()] = true; if (e.key === ' ') e.preventDefault(); });
+addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+const target = new THREE.Vector3(), tmp = new THREE.Vector3();
+function updateMove(dt, t, ending) {
+  const head = camera.position;
+  if (renderer.xr.isPresenting) {
+    if (t < 1.5) state.ref.copy(head);
+    else { state.ref.x += (head.x - state.ref.x) * dt / 60; state.ref.z += (head.z - state.ref.z) * dt / 60; }
+  }
+  target.set(0, 0, 0);
+  if (!ending) {
+    let ox = head.x - state.ref.x, oz = head.z - state.ref.z;
+    if (!renderer.xr.isPresenting) { // 除錯：WASD 模擬傾身
+      const f = (keys.w ? 1 : 0) - (keys.s ? 1 : 0), r = (keys.d ? 1 : 0) - (keys.a ? 1 : 0), y = camera.rotation.y;
+      ox = (-Math.sin(y) * f + Math.cos(y) * r) * 0.2; oz = (-Math.cos(y) * f - Math.sin(y) * r) * 0.2;
+    }
+    const m = Math.hypot(ox, oz), s = smooth(0.05, 0.22, m) * 1.4;
+    if (m > 1e-4) { target.x = ox / m * s; target.z = oz / m * s; }
+    const ex = breath.level;
+    state.lungs = Math.min(1, Math.max(0, state.lungs + (ex > 0.08 ? -0.32 * ex : 0.22) * dt));
+    target.y = THREE.MathUtils.clamp((state.lungs - 0.62) * 1.6, -1.1, 0.7);
+  } else target.y = 0.9;
+  state.vel.lerp(target, 1 - Math.exp(-dt / 1.4));
+  rig.position.addScaledVector(state.vel, dt);
+  const eyeY = rig.position.y + head.y;
+  if (eyeY > EYE_MAX) { rig.position.y = EYE_MAX - head.y; state.vel.y = Math.min(0, state.vel.y); }
+  if (eyeY < EYE_MIN) { rig.position.y = EYE_MIN - head.y; state.vel.y = Math.max(0, state.vel.y); }
+  const r = Math.hypot(rig.position.x, rig.position.z);
+  if (r > WORLD_R) { rig.position.x *= WORLD_R / r; rig.position.z *= WORLD_R / r; }
+}
+
+// ---------- 主迴圈 ----------
+const clock = new THREE.Clock();
+let running = false, tStart = 0, finished = false, audioTick = 0, endingStarted = false;
+const eye = new THREE.Vector3(), sky = new THREE.Color();
+renderer.setAnimationLoop(() => {
+  const dt = Math.min(clock.getDelta(), 0.1), now = clock.elapsedTime;
+  U.uTime.value = now;
+  updateBreath(dt);
+  meterBar.style.width = (breath.level * 100).toFixed(1) + '%';
+
+  if (running) {
+    const t = now - tStart, ending = t > ENDING;
+    updateMove(dt, t, ending);
+    // 淡入（0–4 秒）與淡出（最後 30 秒）
+    veilMat.opacity = ending ? smooth(ENDING, TOTAL - 2, t) : 1 - smooth(0, 4, t);
+    // 提示文字
+    const second = micOK ? HINTS[1] : HINTS[2];
+    hintMat.map = t < 15 ? HINTS[0] : second;
+    hintMat.opacity = t < 15 ? smooth(4, 7, t) * (1 - smooth(13, 15, t)) : smooth(15, 17, t) * (1 - smooth(27, 30, t));
+    if (ending && !endingStarted && actx) { endingStarted = true; master.gain.setTargetAtTime(0, actx.currentTime, 8); }
+    if (t > TOTAL && !finished) finish();
+  } else if (!DEBUG) {
+    camera.rotation.y = now * 0.03; // 開始前的背景緩慢旋轉
+    veilMat.opacity = 0;
+  } else veilMat.opacity = 0;
+
+  // 環境：天色、霧、網格、聲音
+  camera.getWorldPosition(eye);
+  skyAt(eye.y, sky); scene.background.copy(sky); scene.fog.color.copy(sky);
+  gridMat.opacity = 0.45 * (1 - smooth(4, 14, eye.distanceTo(gc)));
+  if (actx && running) {
+    audioTick -= dt;
+    if (audioTick <= 0) {
+      audioTick = 0.25;
+      for (const k in layers) { const w = zoneWeight(k, eye.y); layers[k].forEach(g => g.gain.setTargetAtTime(w, actx.currentTime, 0.8)); }
+    }
+    const wf = zoneWeight('forest', eye.y), wo = zoneWeight('ocean', eye.y);
+    if (wf > 0.3 && Math.random() < dt * 0.6) blip(PENTA[Math.floor(Math.random() * PENTA.length)], PENTA[0] * 2, 2.2, 0.06 * wf);
+    if (wo > 0.3 && Math.random() < dt * 0.8) { const f = 180 + Math.random() * 120; blip(f, f * 2.4, 0.4, 0.05 * wo); }
+  }
+  renderer.render(scene, camera);
+});
+
+// ---------- 介面流程 ----------
+const $ = (id) => document.getElementById(id);
+const meterBar = document.querySelector('#meter > div');
+const show = (id) => ['stepIntro', 'stepCal', 'stepReady', 'stepEnd'].forEach(s => $(s).hidden = s !== id);
+function sample(ms) {
+  return new Promise(res => { const arr = [], t0 = performance.now();
+    const id = setInterval(() => { arr.push(micDb()); if (performance.now() - t0 > ms) { clearInterval(id); res(arr.sort((a, b) => a - b)); } }, 30); });
+}
+const wait = (ms) => new Promise(r => setTimeout(r, ms));
+async function calibrate() {
+  show('stepCal'); $('btnRetry').hidden = true; calibrating = true;
+  $('calMsg').textContent = '準備校準⋯ 請先戴好頭盔，嘴巴自然靠近頭盔下緣。';
+  await wait(2500);
+  $('calMsg').textContent = '① 請保持安靜，用鼻子自然呼吸（4 秒）';
+  const quiet = await sample(4000);
+  $('calMsg').textContent = '② 現在用嘴巴緩慢、長長地吐一口氣，像在吹涼一碗熱湯（5 秒）';
+  const blow = await sample(5000);
+  calibrating = false;
+  breath.floor = quiet[Math.floor(quiet.length * 0.9)];
+  breath.peak = blow[Math.floor(blow.length * 0.8)];
+  if (breath.peak - breath.floor < 6) {
+    $('calMsg').textContent = '沒有聽到明顯的吐氣聲。請把嘴巴靠近頭盔下緣，吐氣稍微用力一點，再試一次。';
+    $('btnRetry').hidden = false; return;
+  }
+  $('stepCal').hidden = true; $('stepReady').hidden = false;
+  $('stepReady').prepend($('meter'));
+}
+$('btnMic').onclick = async () => {
+  if (!actx) initAudio();
+  await actx.resume();
+  try { await initMic(); await calibrate(); }
+  catch (e) {
+    show('stepReady'); $('readyMsg').textContent = '無法使用麥克風（' + e.name + '）。進入 VR 後可以按住扳機代替吐氣。';
+  }
+};
+$('btnRetry').onclick = calibrate;
+$('btnNoMic').onclick = async () => {
+  if (!actx) initAudio();
+  await actx.resume();
+  show('stepReady'); $('readyMsg').textContent = '進入 VR 後，按住手把扳機代替吐氣。';
+};
+
+if (navigator.xr) navigator.xr.isSessionSupported('immersive-vr').then(ok => {
+  $('btnVR').disabled = !ok;
+  if (!ok) $('xrMsg').textContent = '這個瀏覽器不支援 VR。請在 Quest 頭盔的瀏覽器裡開啟這個網址。';
+}).catch(() => {});
+else $('xrMsg').textContent = '這個瀏覽器不支援 WebXR。請在 Quest 頭盔的瀏覽器裡開啟（需要 https）。';
+
+function begin() {
+  $('panel').hidden = true;
+  rig.position.copy(START); state.vel.set(0, 0, 0); state.lungs = 0.62;
+  camera.rotation.set(0, 0, 0);
+  running = true; tStart = clock.elapsedTime; updatePixelScale();
+  if (actx) { actx.resume(); master.gain.cancelScheduledValues(actx.currentTime); master.gain.setTargetAtTime(0.6, actx.currentTime, 1.5); }
+}
+function finish() {
+  finished = true; running = false;
+  const s = renderer.xr.getSession(); if (s) s.end(); else showEnd();
+}
+function showEnd() {
+  running = false; finished = true; veilMat.opacity = 0; updatePixelScale();
+  if (actx) master.gain.setTargetAtTime(0, actx.currentTime, 0.3);
+  $('panel').hidden = false; show('stepEnd');
+}
+$('btnVR').onclick = async () => {
+  try {
+    const session = await navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor'] });
+    await renderer.xr.setSession(session);
+    session.addEventListener('end', showEnd);
+    begin();
+  } catch (e) { $('xrMsg').textContent = '無法進入 VR：' + e.message; }
+};
+
+// 除錯預覽：網址加上 ?debug，在電腦上用 WASD、空白鍵、滑鼠拖曳測試
+if (DEBUG) {
+  $('btnPreview').hidden = false;
+  $('btnPreview').onclick = begin;
+  let drag = null;
+  renderer.domElement.addEventListener('pointerdown', e => drag = [e.clientX, e.clientY]);
+  addEventListener('pointerup', () => drag = null);
+  addEventListener('pointermove', e => {
+    if (!drag) return;
+    camera.rotation.y -= (e.clientX - drag[0]) * 0.004;
+    camera.rotation.x = THREE.MathUtils.clamp(camera.rotation.x - (e.clientY - drag[1]) * 0.004, -1.4, 1.4);
+    drag = [e.clientX, e.clientY];
+  });
+  window.__osmose = { rig, state, breath, eye, scene, camera, keys };
+}
+</script>
+</body>
+</html>
