@@ -72,7 +72,6 @@ import * as THREE from 'three';
 // ---------- 基本設定 ----------
 const DEBUG = new URLSearchParams(location.search).has('debug');
 const TOTAL = 300;          // 總長 5 分鐘
-const ENDING = 230;         // 最後 70 秒：自動帶回最上層，回顧整段旅程
 const TOP_EYE = 70;         // 結尾停留的高度（最上層的程式碼環中）
 const START = new THREE.Vector3(0, 6, 38);
 const EYE_MIN = -88, EYE_MAX = 72, WORLD_R = 50;
@@ -855,23 +854,24 @@ function bell(f, vol, dest) {           // 水晶般的鈴聲（泛音比例 1 :
     o.connect(g).connect(dest); o.start(t); o.stop(t + 4.6);
   });
 }
-function endingCue() {                 // 結尾的聲音提示：上行的鈴聲＋逐漸湧起的和聲
+function endingCue() {                 // 結尾的聲音：溫暖、穩定的低音和聲，像緩慢的呼吸一樣起伏（音高不變）
   const t = actx.currentTime;
-  [261.6, 329.6, 392, 523.3, 659.3, 784].forEach((f, i) => {
-    const o = actx.createOscillator(), g = actx.createGain(), s = t + i * 0.45;
-    o.frequency.value = f;
-    g.gain.setValueAtTime(0, s); g.gain.linearRampToValueAtTime(0.14, s + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, s + 3.5);
-    o.connect(g).connect(bus); o.start(s); o.stop(s + 3.6);
+  const pad = actx.createGain(); pad.gain.setValueAtTime(0, t); pad.gain.linearRampToValueAtTime(0.2, t + 12);
+  const lp = actx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 650;
+  const breathe = actx.createGain(); breathe.gain.value = 0.75;          // 0.1 Hz 的起伏：約 10 秒一次呼吸
+  const l = actx.createOscillator(); l.frequency.value = 0.1; const lg = actx.createGain(); lg.gain.value = 0.25;
+  l.connect(lg).connect(breathe.gain); l.start(t);
+  [98, 146.8, 196, 246.9].forEach((f, i) => {
+    const o = actx.createOscillator(); o.type = i < 2 ? 'sine' : 'triangle'; o.frequency.value = f; o.detune.value = i % 2 ? 4 : -4;
+    const og = actx.createGain(); og.gain.value = i < 2 ? 0.35 : 0.2;
+    o.connect(og).connect(lp); o.start(t);
   });
-  const pad = actx.createGain(); pad.gain.setValueAtTime(0, t); pad.gain.linearRampToValueAtTime(0.22, t + 8);
-  const lp = actx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.setValueAtTime(300, t); lp.frequency.linearRampToValueAtTime(1400, t + 40);
-  [130.8, 196, 261.6, 329.6, 392].forEach((f, i) => {
-    const o = actx.createOscillator(); o.type = 'triangle'; o.frequency.setValueAtTime(f, t);
-    o.frequency.linearRampToValueAtTime(f * 1.5, t + 60); o.detune.value = i % 2 ? 6 : -6;
-    o.connect(lp); o.start(t);
-  });
-  lp.connect(pad).connect(bus);
-  for (const k in layers) layers[k].forEach(g => g.gain.setTargetAtTime(0.0, t, 3)); // 各層聲音退後，讓和聲成為主角
+  const air = actx.createBufferSource(); air.buffer = NOISE; air.loop = true;   // 很輕的氣息聲
+  const af = actx.createBiquadFilter(); af.type = 'lowpass'; af.frequency.value = 450;
+  const ag = actx.createGain(); ag.gain.value = 0.12;
+  air.connect(af).connect(ag).connect(lp); air.start(t);
+  lp.connect(breathe).connect(pad).connect(bus);
+  for (const k in layers) layers[k].forEach(g => g.gain.setTargetAtTime(0.0, t, 4)); // 各層聲音退後
   endingMuted = true;
 }
 let endingMuted = false;
@@ -1006,7 +1006,7 @@ function updateMove(dt, t, ending) {
     const pitch = Math.asin(THREE.MathUtils.clamp(lookDir.y, -1, 1));
     const rise = smooth(RISE_FROM, RISE_FULL, pitch) * RISE_MAX;
     target.y = rise - sink;
-  } else { ascend(t); return; }
+  } else { ascend(dt, t); return; }
   // 水平慢慢加速；垂直反應快一點，吐氣時能立刻感覺到下沉
   const kh = 1 - Math.exp(-dt / 1.4), kv = 1 - Math.exp(-dt / 0.7);
   state.vel.x += (target.x - state.vel.x) * kh; state.vel.z += (target.z - state.vel.z) * kh;
@@ -1020,20 +1020,32 @@ function updateMove(dt, t, ending) {
 }
 
 // 結尾：把體驗者從所在位置緩緩帶回最上層，途中經過每一層
+// 結尾：以穩定、緩慢的速度把體驗者帶回最上層，途中經過每一層
+const ASC_V = 0.9;        // 上升速度（公尺／秒），和抬頭上浮差不多，不會暈
+const ASC_SIDE = 0.3;     // 往中央水晶樹靠近的水平速度
 let asc = null;
-function ascend(t) {
+function ascend(dt, t) {
   const head = camera.position;
-  if (!asc) asc = { x: rig.position.x, y: rig.position.y, z: rig.position.z, t0: t };
-  const kY = smooth(asc.t0, TOTAL - 12, t), kXZ = smooth(asc.t0, asc.t0 + 25, t);
-  rig.position.y = asc.y + (TOP_EYE - head.y - asc.y) * kY;
-  rig.position.x = asc.x + (3 - asc.x) * kXZ;     // 靠近中央的水晶樹，從它身旁上升
-  rig.position.z = asc.z + (4 - asc.z) * kXZ;
+  if (!asc) asc = { v: Math.max(0, state.vel.y), arrived: null };
+  const remain = TOP_EYE - (rig.position.y + head.y);
+  const vTarget = Math.max(0, Math.min(ASC_V, remain * 0.2));           // 接近頂端時慢慢減速
+  asc.v += (vTarget - asc.v) * (1 - Math.exp(-dt / 3));                  // 約 3 秒的緩和加速
+  rig.position.y += asc.v * dt;
+  const dx = 3 - rig.position.x, dz = 4 - rig.position.z, d = Math.hypot(dx, dz);
+  if (d > 0.05) { const k = Math.min(d, ASC_SIDE * dt) / d; rig.position.x += dx * k; rig.position.z += dz * k; }
+  if (remain < 0.6 && asc.arrived === null) asc.arrived = t;
   state.vel.set(0, 0, 0);
+}
+// 依照現在的深度決定何時開始回程，確保在 5 分鐘左右抵達頂端
+function shouldEnd(t) {
+  if (t < 90) return false;
+  const need = Math.max(0, TOP_EYE - (rig.position.y + camera.position.y)) / ASC_V + 14;
+  return t >= TOTAL - 10 - need;
 }
 
 // ---------- 主迴圈 ----------
 const clock = new THREE.Clock();
-let running = false, tStart = 0, finished = false, audioTick = 0, endingStarted = false, fadeStarted = false;
+let running = false, tStart = 0, finished = false, audioTick = 0, endingStarted = false, fadeStarted = false, endingAt = null;
 const eye = new THREE.Vector3(), sky = new THREE.Color();
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.1), now = clock.elapsedTime;
@@ -1042,22 +1054,24 @@ renderer.setAnimationLoop(() => {
   meterBar.style.width = (breath.level * 100).toFixed(1) + '%';
 
   if (running) {
-    const t = now - tStart, ending = t > ENDING;
+    const t = now - tStart;
+    if (endingAt === null && shouldEnd(t)) endingAt = t;
+    const ending = endingAt !== null, arrived = asc && asc.arrived !== null ? asc.arrived : null;
     updateMove(dt, t, ending);
-    // 淡入（0–4 秒）與淡出（最後 30 秒）
-    veilMat.opacity = ending ? smooth(TOTAL - 9, TOTAL - 1, t) : 1 - smooth(0, 4, t);
+    // 淡入（0–4 秒）；抵達頂端後停留片刻再淡出
+    veilMat.opacity = ending ? (arrived !== null ? smooth(arrived + 3, arrived + 10, t) : 0) : 1 - smooth(0, 4, t);
     // 提示文字
     const second = micOK ? HINTS[1] : HINTS[2];
     if (ending) {
       hintMat.map = HINTS[3];
-      hintMat.opacity = smooth(ENDING + 1, ENDING + 3, t) * (1 - smooth(ENDING + 9, ENDING + 11, t));
+      hintMat.opacity = smooth(endingAt + 1, endingAt + 3, t) * (1 - smooth(endingAt + 9, endingAt + 11, t));
     } else {
       hintMat.map = t < 15 ? HINTS[0] : second;
       hintMat.opacity = t < 15 ? smooth(4, 7, t) * (1 - smooth(13, 15, t)) : smooth(15, 17, t) * (1 - smooth(27, 30, t));
     }
     if (ending && !endingStarted && actx) { endingStarted = true; endingCue(); }
-    if (t > TOTAL - 10 && !fadeStarted && actx) { fadeStarted = true; master.gain.setTargetAtTime(0, actx.currentTime, 2.5); }
-    if (t > TOTAL && !finished) finish();
+    if (arrived !== null && t > arrived + 3 && !fadeStarted && actx) { fadeStarted = true; master.gain.setTargetAtTime(0, actx.currentTime, 2.5); }
+    if (arrived !== null && t > arrived + 11 && !finished) finish();
   } else if (!DEBUG) {
     camera.rotation.y = now * 0.03; // 開始前的背景緩慢旋轉
     veilMat.opacity = 0;
