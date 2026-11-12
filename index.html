@@ -39,7 +39,8 @@
   <div id="stepIntro">
     <ul>
       <li><b>身體輕輕前傾、後仰或側傾</b>，就會往那個方向漂。</li>
-      <li><b>用嘴巴慢慢吐氣</b>會下沉；停下來吸氣，肺裡充滿空氣，就會慢慢浮起。</li>
+      <li><b>用嘴巴吐氣</b>會往下沉，吐得越多沉得越快；不吐氣時也會非常緩慢地下沉。</li>
+      <li><b>抬頭往上看</b>，就會慢慢浮起。</li>
       <li>請站著體驗，周圍留一點空間，不用走動。</li>
     </ul>
     <button id="btnMic">開始：允許麥克風</button>
@@ -74,15 +75,19 @@ const TOTAL = 300;          // 總長 5 分鐘
 const ENDING = 270;         // 最後 30 秒自動上浮、淡出
 const START = new THREE.Vector3(0, 6, 38);
 const EYE_MIN = -88, EYE_MAX = 72, WORLD_R = 50;
+const TAU = Math.PI * 2;
 
 let seed = 1995;
-function rnd() { // mulberry32：固定種子，每次世界長得一樣
+function rnd() { // 固定種子：每次世界長得一樣
   seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
   t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
 }
 const rand = (a, b) => a + (b - a) * rnd();
 const hsl = (h, s, l) => new THREE.Color().setHSL(h, s, l);
 const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+const V = (x, y, z) => new THREE.Vector3(x, y, z);
+const randInSphere = (r) => { let v; do { v = V(rand(-1, 1), rand(-1, 1), rand(-1, 1)); } while (v.lengthSq() > 1); return v.multiplyScalar(r); };
+const ringPoint = (r0, r1) => { const a = rand(0, TAU), r = Math.sqrt(rand((r0 / r1) ** 2, 1)) * r1; return [Math.cos(a) * r, Math.sin(a) * r]; };
 
 // ---------- 場景 ----------
 const renderer = new THREE.WebGLRenderer({ antialias: false });
@@ -95,7 +100,7 @@ document.body.prepend(renderer.domElement);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x000000);
-scene.fog = new THREE.Fog(0x000000, 3, 38);
+scene.fog = new THREE.Fog(0x000000, 3, 40);
 const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.05, 400);
 camera.position.set(0, 1.6, 0);
 camera.rotation.order = 'YXZ';
@@ -110,7 +115,6 @@ addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight); updatePixelScale();
 });
 
-// ---------- 柔焦光點材質（sfumato） ----------
 const U = { uTime: { value: 0 }, uPixel: { value: 600 } };
 function updatePixelScale() {
   U.uPixel.value = renderer.xr.isPresenting ? 820
@@ -118,181 +122,491 @@ function updatePixelScale() {
 }
 updatePixelScale();
 
-const VS = `
-uniform float uTime, uPixel, uFar, uDrift, uMaxSize;
-uniform float uBox, uYMin, uYMax;
+// =====================================================================
+//  材質一：柔焦光點（霧、浮游生物、露珠、昆蟲群）
+// =====================================================================
+const PVS = `
+uniform float uTime, uPixel, uFar, uDrift, uMaxSize, uBox, uYMin, uYMax;
 attribute float aSize; attribute float aPhase; attribute vec3 aColor;
+#ifdef SWARM
+attribute vec3 aBase; attribute float aSwarm;
+#endif
 varying vec3 vColor; varying float vAlpha;
 void main() {
   vec3 p = position + uDrift * vec3(sin(uTime*0.31 + aPhase*7.0), sin(uTime*0.23 + aPhase*5.0), cos(uTime*0.27 + aPhase*3.0));
-  float band = 1.0;
+  float band = 1.0, flick = 1.0;
 #ifdef WRAP
-  // 光點在體驗者周圍的方盒裡循環，任何位置都保持相同密度
   p = cameraPosition + mod(p - cameraPosition + 0.5 * uBox, uBox) - 0.5 * uBox;
   band = smoothstep(uYMin, uYMin + 4.0, p.y) * (1.0 - smoothstep(uYMax - 4.0, uYMax, p.y));
+#endif
+#ifdef SWARM
+  // 昆蟲群：整群沿著緩慢的曲線漂移，每隻蟲繞著群中心快速飛舞、翅膀閃爍
+  vec3 c = aBase + vec3(sin(uTime*0.13 + aSwarm)*5.0, sin(uTime*0.21 + aSwarm*2.0)*1.5, cos(uTime*0.11 + aSwarm)*5.0);
+  float s1 = 0.7 + aPhase * 1.4;
+  p = c + vec3(position.x * sin(uTime*s1 + aPhase*40.0), position.y * sin(uTime*s1*1.3 + aPhase*17.0), position.z * cos(uTime*s1 + aPhase*40.0))
+        + 0.07 * vec3(sin(uTime*23.0 + aPhase*90.0), sin(uTime*29.0 + aPhase*70.0), cos(uTime*19.0 + aPhase*50.0));
+  flick = 0.45 + 0.55 * abs(sin(uTime*14.0 + aPhase*100.0));
 #endif
   vec4 mv = modelViewMatrix * vec4(p, 1.0);
   float d = max(-mv.z, 0.05);
   gl_Position = projectionMatrix * mv;
   gl_PointSize = clamp(2.4 * aSize * uPixel / d, 1.5, uMaxSize);
   float tw = 0.7 + 0.3 * sin(uTime*1.3 + aPhase*20.0);
-  vAlpha = band * tw * smoothstep(0.15, 1.2, d) * (1.0 - smoothstep(uFar*0.35, uFar, d));
+  vAlpha = flick * band * tw * smoothstep(0.15, 1.2, d) * (1.0 - smoothstep(uFar*0.35, uFar, d));
   vColor = aColor * 2.2;
 }`;
-const FS = `
+const PFS = `
 uniform float uOpacity; varying vec3 vColor; varying float vAlpha;
 void main() {
-  float r = length(gl_PointCoord - 0.5);
+  vec2 q = gl_PointCoord - 0.5; float r = length(q);
+#ifdef DROP
+  // 露珠／光斑：亮邊加上一點高光
+  float a = (1.0 - smoothstep(0.40, 0.5, r)) * (0.22 + 0.78 * smoothstep(0.18, 0.46, r));
+  a += 0.7 * (1.0 - smoothstep(0.0, 0.11, length(q - vec2(-0.13, -0.14))));
+#else
   float a = 1.0 - smoothstep(0.0, 0.5, r); a = a * (0.4 + 0.6 * a);
+#endif
   if (a < 0.01) discard;
   gl_FragColor = vec4(vColor, a * vAlpha * uOpacity);
 }`;
-function pointMat({ opacity = 1, far = 42, drift = 0.04, maxSize = 48, wrap = null } = {}) {
+function pointMat({ opacity = 1, far = 42, drift = 0.04, maxSize = 48, wrap = null, swarm = false, drop = false } = {}) {
+  const defines = {}; if (wrap) defines.WRAP = ''; if (swarm) defines.SWARM = ''; if (drop) defines.DROP = '';
   return new THREE.ShaderMaterial({
-    defines: wrap ? { WRAP: '' } : {},
+    defines,
     uniforms: { uTime: U.uTime, uPixel: U.uPixel, uOpacity: { value: opacity }, uFar: { value: wrap ? wrap.box / 2 : far },
       uDrift: { value: drift }, uMaxSize: { value: maxSize },
       uBox: { value: wrap ? wrap.box : 1 }, uYMin: { value: wrap ? wrap.y0 : 0 }, uYMax: { value: wrap ? wrap.y1 : 0 } },
-    vertexShader: VS, fragmentShader: FS,
+    vertexShader: PVS, fragmentShader: PFS,
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
   });
 }
 class Pts {
-  constructor() { this.p = []; this.c = []; this.s = []; this.ph = []; }
-  add(x, y, z, col, size) { this.p.push(x, y, z); this.c.push(col.r, col.g, col.b); this.s.push(size); this.ph.push(rnd()); }
+  constructor() { this.p = []; this.c = []; this.s = []; this.ph = []; this.base = []; this.sw = []; }
+  add(x, y, z, col, size) { this.p.push(x, y, z); this.c.push(col.r, col.g, col.b); this.s.push(size); this.ph.push(rnd()); return this; }
   build(mat) {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(this.p, 3));
     g.setAttribute('aColor', new THREE.Float32BufferAttribute(this.c, 3));
     g.setAttribute('aSize', new THREE.Float32BufferAttribute(this.s, 1));
     g.setAttribute('aPhase', new THREE.Float32BufferAttribute(this.ph, 1));
+    if (this.base.length) {
+      g.setAttribute('aBase', new THREE.Float32BufferAttribute(this.base, 3));
+      g.setAttribute('aSwarm', new THREE.Float32BufferAttribute(this.sw, 1));
+    }
     const m = new THREE.Points(g, mat); m.frustumCulled = false; scene.add(m); return m;
   }
 }
-const randInSphere = (r) => { let v; do { v = new THREE.Vector3(rand(-1, 1), rand(-1, 1), rand(-1, 1)); } while (v.lengthSq() > 1); return v.multiplyScalar(r); };
 
-// ---------- 樹（由光點組成的枝幹與葉） ----------
-const bark = new Pts(), leaves = new Pts(), roots = new Pts();
-function branch(set, leafSet, from, dir, len, depth, o) {
-  const n = Math.max(3, Math.floor(len * o.density));
-  const size = o.barkSize * (1 - depth / (o.maxDepth + 2));
-  for (let i = 0; i < n; i++) {
-    const t = i / n, j = o.jitter * (1 - t * 0.5);
-    set.add(from.x + dir.x * len * t + rand(-j, j), from.y + dir.y * len * t + rand(-j, j),
-      from.z + dir.z * len * t + rand(-j, j), o.barkCol(), size);
+// =====================================================================
+//  材質二：半透明水晶（菲涅耳邊緣發光＋珍珠般的虹彩）
+//  正面看幾乎透明，邊緣發亮；可以直接穿過去
+// =====================================================================
+const CVS = `
+uniform float uTime;
+attribute float aH;
+varying vec3 vN; varying vec3 vW; varying float vD; varying float vH;
+void main() {
+  vec3 pos = position;
+  vec4 w; vec3 n;
+#ifdef USE_INSTANCING
+  float ph = instanceMatrix[3].x * 0.37 + instanceMatrix[3].z * 0.23;
+  #ifdef PULSE
+  float k = sin(uTime * 1.6 + ph * 5.0);
+  pos.xz *= 1.0 + 0.16 * k; pos.y *= 1.0 - 0.12 * k;
+  #endif
+  w = modelMatrix * instanceMatrix * vec4(pos, 1.0);
+  n = mat3(modelMatrix) * mat3(instanceMatrix) * normal;
+  #ifdef SWAY
+  w.xz += vec2(sin(uTime * 0.7 + ph), cos(uTime * 0.6 + ph * 1.3)) * 0.07 * max(pos.y, 0.0);
+  #endif
+  #ifdef PULSE
+  w.y += sin(uTime * 0.3 + ph) * 0.6;
+  #endif
+#else
+  w = modelMatrix * vec4(pos, 1.0);
+  n = mat3(modelMatrix) * normal;
+#endif
+  vN = n; vW = w.xyz; vH = aH;
+  vec4 mv = viewMatrix * w; vD = -mv.z;
+  gl_Position = projectionMatrix * mv;
+}`;
+const CFS = `
+uniform float uTime, uOpacity, uFar, uIri, uBase, uShimmer;
+uniform vec3 uColA, uColB;
+varying vec3 vN; varying vec3 vW; varying float vD; varying float vH;
+void main() {
+  vec3 v = normalize(cameraPosition - vW);
+  float f = 1.0 - abs(dot(normalize(vN), v));
+  f = pow(f, 1.5);
+  vec3 iri = 0.5 + 0.5 * cos(6.2831 * (vec3(0.0, 0.33, 0.67) + f * 1.3 + vW.y * 0.04 + uTime * 0.02));
+  vec3 col = mix(uColA, uColB, f) + uIri * iri * f;
+  float sh = 1.0 - uShimmer + uShimmer * (0.5 + 0.5 * sin(vW.y * 3.0 - uTime * 1.2 + vW.x * 1.7 + vW.z * 1.3));
+  float a = (uBase + (1.0 - uBase) * f) * sh * uOpacity;
+  a *= smoothstep(0.1, 0.8, vD) * (1.0 - smoothstep(uFar * 0.4, uFar, vD));
+  gl_FragColor = vec4(col, a);
+}`;
+function crystalMat({ a = [0.2, 0.1, 0.08], b = [1, 0.7, 0.55], opacity = 1, far = 60, iri = 0.4, base = 0.05, shimmer = 0.4, sway = false, pulse = false } = {}) {
+  const defines = {}; if (sway) defines.SWAY = ''; if (pulse) defines.PULSE = '';
+  return new THREE.ShaderMaterial({
+    defines,
+    uniforms: { uTime: U.uTime, uOpacity: { value: opacity }, uFar: { value: far }, uIri: { value: iri }, uBase: { value: base },
+      uShimmer: { value: shimmer }, uColA: { value: new THREE.Color(...a) }, uColB: { value: new THREE.Color(...b) } },
+    vertexShader: CVS, fragmentShader: CFS,
+    transparent: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+  });
+}
+
+// 管狀枝幹（自己組成一個大網格，效能較好）
+class Tubes {
+  constructor() { this.pos = []; this.nor = []; this.h = []; }
+  seg(a, b, ra, rb, sides, h0, h1) {
+    const d = V(0, 0, 0).subVectors(b, a).normalize();
+    const u = V(0, 0, 0).crossVectors(d, Math.abs(d.y) < 0.95 ? V(0, 1, 0) : V(1, 0, 0)).normalize();
+    const w = V(0, 0, 0).crossVectors(d, u);
+    for (let i = 0; i < sides; i++) {
+      const t0 = (i / sides) * TAU, t1 = ((i + 1) / sides) * TAU;
+      const n0 = u.clone().multiplyScalar(Math.cos(t0)).addScaledVector(w, Math.sin(t0));
+      const n1 = u.clone().multiplyScalar(Math.cos(t1)).addScaledVector(w, Math.sin(t1));
+      const p00 = a.clone().addScaledVector(n0, ra), p01 = a.clone().addScaledVector(n1, ra);
+      const p10 = b.clone().addScaledVector(n0, rb), p11 = b.clone().addScaledVector(n1, rb);
+      for (const [p, n, h] of [[p00, n0, h0], [p10, n0, h1], [p11, n1, h1], [p00, n0, h0], [p11, n1, h1], [p01, n1, h0]]) {
+        this.pos.push(p.x, p.y, p.z); this.nor.push(n.x, n.y, n.z); this.h.push(h);
+      }
+    }
   }
-  const end = from.clone().addScaledVector(dir, len);
+  build(mat) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(this.pos, 3));
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(this.nor, 3));
+    g.setAttribute('aH', new THREE.Float32BufferAttribute(this.h, 1));
+    const m = new THREE.Mesh(g, mat); m.frustumCulled = false; scene.add(m); return m;
+  }
+}
+function lineSet(pairs, color, opacity) {
+  const arr = []; pairs.forEach(([a, b]) => arr.push(a.x, a.y, a.z, b.x, b.y, b.z));
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(arr, 3));
+  const m = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color, transparent: true, opacity, depthWrite: false, blending: THREE.AdditiveBlending }));
+  m.frustumCulled = false; scene.add(m); return m;
+}
+
+// 彎曲、分岔的枝幹生成器（樹與根共用）
+function grow(tubes, lines, nodes, from, dir, len, rad, depth, o) {
+  let p = from.clone(); const d = dir.clone();
+  for (let s = 0; s < 3; s++) {
+    d.add(randInSphere(o.wiggle)); d.y += o.up; d.normalize();
+    const q = p.clone().addScaledVector(d, len / 3);
+    tubes.seg(p, q, rad * (1 - s * 0.12), rad * (1 - (s + 1) * 0.12), o.sides, depth / o.maxDepth, (depth + 0.3) / o.maxDepth);
+    if (lines) lines.push([p, q]);
+    p = q;
+  }
+  if (nodes) nodes.push(p.clone());
   if (depth >= o.maxDepth) {
-    if (leafSet) for (let k = 0; k < o.leafCount; k++) {
-      const v = randInSphere(o.leafR).add(end); leafSet.add(v.x, v.y, v.z, o.leafCol(), o.leafSize);
+    if (lines) for (let k = 0; k < o.twigs; k++) {   // 末梢的細絲
+      const q = p.clone().addScaledVector(d.clone().add(randInSphere(1.0)).normalize(), len * rand(0.4, 0.9));
+      lines.push([p, q]);
     }
     return;
   }
-  const kids = 2 + (rnd() < 0.5 ? 1 : 0);
+  const kids = rnd() < 0.35 ? 3 : 2;
   for (let k = 0; k < kids; k++) {
-    const nd = dir.clone().add(randInSphere(o.spread)); nd.y += o.bias; nd.normalize();
-    branch(set, leafSet, end, nd, len * rand(0.62, 0.8), depth + 1, o);
+    const nd = d.clone().add(randInSphere(o.spread)); nd.y += o.bias; nd.normalize();
+    grow(tubes, lines, nodes, p, nd, len * rand(0.66, 0.84), rad * rand(0.55, 0.72), depth + 1, o);
   }
 }
-const barkCol = () => hsl(rand(0.07, 0.12), 0.3, rand(0.22, 0.34));
-const leafCol = () => hsl(rand(0.2, 0.38), 0.75, rand(0.3, 0.5));
-const rootCol = () => hsl(rand(0.08, 0.13), 0.55, rand(0.3, 0.42));
-function tree(x, z, trunk, maxDepth, leafCount, rootDepth) {
-  const base = new THREE.Vector3(x, 0, z);
-  branch(bark, leaves, base, new THREE.Vector3(rand(-.1, .1), 1, rand(-.1, .1)).normalize(), trunk, 0,
-    { density: 22, jitter: 0.16, barkSize: 0.13, barkCol, maxDepth, spread: 0.8, bias: 0.25,
-      leafCount, leafR: trunk * 0.18, leafCol, leafSize: 0.07 });
-  branch(roots, null, base, new THREE.Vector3(0, -1, 0), trunk * 0.7, 0,
-    { density: 12, jitter: 0.08, barkSize: 0.07, barkCol: rootCol, maxDepth: rootDepth, spread: 1.0, bias: -0.35 });
-}
-tree(0, 0, 7, 5, 40, 5);                       // 中央的大樹
-const POND = new THREE.Vector3(-16, 0, 6);
-for (let i = 0; i < 14; i++) {
-  const a = (i / 14) * Math.PI * 2 + rand(-.2, .2), r = rand(16, 45);
-  const x = Math.cos(a) * r, z = Math.sin(a) * r;
-  if (Math.hypot(x - POND.x, z - POND.z) < 9 || Math.hypot(x - START.x, z - START.z) < 8) continue;
-  tree(x, z, rand(3, 5), 4, 18, 3);
-}
-bark.build(pointMat({ opacity: 0.9 }));
-leaves.build(pointMat({ opacity: 0.8, drift: 0.08 }));
-roots.build(pointMat({ opacity: 0.9, far: 36 }));
 
-// 地面、池塘、露珠、昆蟲群
-const ground = new Pts(), pond = new Pts(), dew = new Pts(), insects = new Pts();
+// =====================================================================
+//  中心：水晶般的枯樹，樹根在半透明地面下鏡像延伸
+// =====================================================================
+const crystal = new Tubes(), crystalLines = [], rootNodes = [];
+grow(crystal, crystalLines, null, V(0, 0, 0), V(0, 1, 0), 6.5, 0.7, 0,
+  { wiggle: 0.35, up: 0.06, spread: 0.95, bias: 0.18, sides: 7, maxDepth: 6, twigs: 5 });
+grow(crystal, crystalLines, rootNodes, V(0, 0, 0), V(0, -1, 0), 5.5, 0.5, 0,
+  { wiggle: 0.45, up: -0.05, spread: 1.15, bias: -0.22, sides: 7, maxDepth: 6, twigs: 6 });
+crystal.build(crystalMat({ a: [0.12, 0.06, 0.06], b: [1.0, 0.72, 0.6], iri: 0.55, base: 0.04, shimmer: 0.5, far: 70 }));
+lineSet(crystalLines, 0xffd2bc, 0.7);   // 樹的「核心」與細絲
+
+// 根的節點：遠看像星系，靠近像微生物
+const galaxy = new Pts();
+rootNodes.forEach((n) => {
+  const cnt = 18;
+  for (let i = 0; i < cnt; i++) {
+    const v = randInSphere(1); v.y *= 0.35; const r = rand(0.1, 0.9);
+    galaxy.add(n.x + v.x * r, n.y + v.y * r, n.z + v.z * r, hsl(rand(0.05, 0.12), 0.8, rand(0.45, 0.7)), rand(0.025, 0.05));
+  }
+});
+galaxy.build(pointMat({ opacity: 0.9, far: 50, drift: 0.03 }));
+
+// 林間空地的半透明地面：從上下兩側都看得見，可以沉穿過去
+const clearingMat = new THREE.ShaderMaterial({
+  uniforms: { uTime: U.uTime },
+  vertexShader: `varying vec2 vP; void main(){ vP = position.xy; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+  fragmentShader: `uniform float uTime; varying vec2 vP;
+    void main(){ float r = length(vP);
+      float n = 0.6 + 0.4 * sin(vP.x*0.9 + sin(vP.y*0.7 + uTime*0.2)*2.0) * sin(vP.y*1.1 - uTime*0.15);
+      float a = (1.0 - smoothstep(4.0, 16.0, r)) * 0.22 * n;
+      gl_FragColor = vec4(vec3(1.0, 0.62, 0.48) * (0.6 + 0.4*n), a); }`,
+  transparent: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+});
+const clearing = new THREE.Mesh(new THREE.CircleGeometry(16, 48), clearingMat);
+clearing.rotation.x = -Math.PI / 2; clearing.position.y = 0.02; scene.add(clearing);
+
+// 地面附近漂浮的粉白光球
+const orbs = new Pts();
+for (let i = 0; i < 140; i++) {
+  const [x, z] = ringPoint(1.5, 16);
+  orbs.add(x, rand(-1.5, 2.5), z, rnd() < 0.5 ? hsl(0.97, 0.6, 0.72) : hsl(0.08, 0.4, 0.8), rand(0.18, 0.5));
+}
+orbs.build(pointMat({ opacity: 0.55, drift: 0.35, maxSize: 160, drop: true, far: 50 }));
+
+// =====================================================================
+//  繁密黑暗的森林：半透明的暗色樹影、蕨類底層、落葉、苔光
+// =====================================================================
+const POND = V(-16, 0, 6);
+const forestT = new Tubes();
+for (let i = 0; i < 46; i++) {
+  const [x, z] = ringPoint(14, 49);
+  if (Math.hypot(x - POND.x, z - POND.z) < 8) continue;
+  grow(forestT, null, null, V(x, -0.5, z), V(rand(-.08, .08), 1, rand(-.08, .08)).normalize(), rand(4, 7), rand(0.25, 0.45), 0,
+    { wiggle: 0.3, up: 0.05, spread: 0.8, bias: 0.25, sides: 5, maxDepth: 4, twigs: 0 });
+}
+forestT.build(crystalMat({ a: [0.03, 0.01, 0.01], b: [0.55, 0.24, 0.18], iri: 0.08, base: 0.03, shimmer: 0.2, far: 42 }));
+
+// 蕨類：一叢由幾片彎曲的葉片組成，隨風輕擺
+function fernGeometry() {
+  const pos = [], nor = [], h = [];
+  const fronds = 9, segs = 10;
+  for (let f = 0; f < fronds; f++) {
+    const ang = (f / fronds) * TAU + rand(-0.3, 0.3), dir = V(Math.cos(ang), 0, Math.sin(ang));
+    const side = V(-dir.z, 0, dir.x), L = rand(0.8, 1.3);
+    const pts = [];
+    for (let s = 0; s <= segs; s++) {
+      const t = s / segs;
+      const c = dir.clone().multiplyScalar(t * L * 0.9).add(V(0, Math.sin(t * Math.PI * 0.8) * L * 0.6, 0));
+      const wdt = (0.05 + 0.09 * (s % 2)) * Math.sin(t * Math.PI) + 0.005;   // 鋸齒狀的小葉
+      pts.push([c.clone().addScaledVector(side, -wdt), c.clone().addScaledVector(side, wdt), t]);
+    }
+    for (let s = 0; s < segs; s++) {
+      const [a0, b0, t0] = pts[s], [a1, b1, t1] = pts[s + 1];
+      const n = V(0, 0, 0).subVectors(a1, a0).cross(V(0, 0, 0).subVectors(b0, a0)).normalize();
+      for (const [p, t] of [[a0, t0], [b0, t0], [b1, t1], [a0, t0], [b1, t1], [a1, t1]]) { pos.push(p.x, p.y, p.z); nor.push(n.x, n.y, n.z); h.push(t); }
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  g.setAttribute('aH', new THREE.Float32BufferAttribute(h, 1));
+  return g;
+}
+const FERNS = 1400;
+const ferns = new THREE.InstancedMesh(fernGeometry(),
+  crystalMat({ a: [0.0, 0.01, 0.005], b: [0.16, 0.24, 0.12], iri: 0.06, base: 0.02, shimmer: 0.3, far: 26, opacity: 0.8, sway: true }), FERNS);
+{
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(); let n = 0;
+  while (n < FERNS) {
+    const [x, z] = ringPoint(5, 48);
+    if (Math.hypot(x - POND.x, z - POND.z) < 6.5) continue;
+    q.setFromAxisAngle(V(0, 1, 0), rand(0, TAU));
+    const s = rand(0.6, 1.7) * (Math.hypot(x, z) < 12 ? 0.7 : 1);
+    m.compose(V(x, 0, z), q, V(s, s * rand(0.8, 1.3), s));
+    ferns.setMatrixAt(n++, m);
+  }
+}
+ferns.frustumCulled = false; scene.add(ferns);
+
+const ground = new Pts(), pond = new Pts(), moss = new Pts();
 for (let i = 0; i < 9000; i++) {
-  const a = rand(0, Math.PI * 2), r = Math.sqrt(rnd()) * 48, x = Math.cos(a) * r, z = Math.sin(a) * r;
+  const [x, z] = ringPoint(0, 48);
   if (Math.hypot(x - POND.x, z - POND.z) < 6.5) continue;
-  ground.add(x, rand(0, 0.25), z, hsl(rand(0.25, 0.35), 0.5, rand(0.08, 0.16)), 0.06);
+  const leaf = rnd() < 0.4;
+  ground.add(x, rand(0, 0.2), z, leaf ? hsl(rand(0.02, 0.08), 0.55, rand(0.1, 0.2)) : hsl(rand(0.25, 0.35), 0.4, rand(0.06, 0.12)), leaf ? 0.07 : 0.05);
 }
 for (let i = 0; i < 3500; i++) {
-  const a = rand(0, Math.PI * 2), r = Math.sqrt(rnd()) * 6;
-  pond.add(POND.x + Math.cos(a) * r, 0.03, POND.z + Math.sin(a) * r, hsl(rand(0.52, 0.58), 0.8, rand(0.25, 0.5)), 0.05);
+  const [x, z] = ringPoint(0, 6);
+  pond.add(POND.x + x, 0.03, POND.z + z, hsl(rand(0.52, 0.6), 0.8, rand(0.25, 0.5)), 0.05);
 }
-for (let i = 0; i < 700; i++) {
-  const a = rand(0, Math.PI * 2), r = Math.sqrt(rnd()) * 40;
-  dew.add(Math.cos(a) * r, rand(0.3, 8), Math.sin(a) * r, hsl(rand(0.45, 0.55), 0.6, 0.75), 0.06);
-}
-for (let i = 0; i < 1500; i++) {
-  const v = randInSphere(1).normalize().multiplyScalar(rand(5, 8));
-  insects.add(v.x, 10 + v.y * 0.6, v.z, hsl(rand(0.12, 0.16), 0.9, 0.6), 0.035);
+for (let i = 0; i < 900; i++) {
+  const [x, z] = ringPoint(10, 48);
+  moss.add(x, rand(0.05, 0.6), z, hsl(rand(0.28, 0.42), 0.8, rand(0.4, 0.6)), 0.03);
 }
 ground.build(pointMat({ opacity: 0.8 }));
 pond.build(pointMat({ opacity: 0.9, drift: 0.05 }));
-dew.build(pointMat({ opacity: 1, drift: 0.35 }));
-insects.build(pointMat({ opacity: 0.9, drift: 1.2 }));
+moss.build(pointMat({ opacity: 0.9, drift: 0.05, far: 30 }));
 
-// 雲
-const clouds = new Pts();
+// 露珠：發光、緩緩掠過
+const dew = new Pts();
+for (let i = 0; i < 900; i++) {
+  const [x, z] = ringPoint(0, 46);
+  dew.add(x, rand(0.3, 14), z, rnd() < 0.7 ? hsl(rand(0.48, 0.55), 0.5, 0.8) : hsl(0.95, 0.5, 0.82), rand(0.06, 0.13));
+}
+dew.build(pointMat({ opacity: 0.85, drift: 0.5, maxSize: 90, drop: true, far: 36 }));
+
+// 半透明的昆蟲群
+const SWARMS = [V(4, 5, 30), V(-8, 3, 20), V(10, 3, 8), V(-6, 2, -10), V(14, 3, -16), V(-20, 2.5, -4), V(2, 5, -24), V(-14, 4, 30), V(22, 3, 18)];
+const insects = new Pts();
+SWARMS.forEach((b, si) => {
+  for (let i = 0; i < 260; i++) {
+    const v = randInSphere(1); const r = rand(0.6, 2.8);
+    insects.add(v.x * r, v.y * r * 0.6, v.z * r, hsl(rand(0.12, 0.2), 0.7, rand(0.6, 0.78)), rand(0.03, 0.05));
+    insects.base.push(b.x, b.y, b.z); insects.sw.push(si * 1.7);
+  }
+});
+insects.build(pointMat({ opacity: 1, swarm: true, far: 40 }));
+const swarmCenter = (i, t, out) => {
+  const b = SWARMS[i], s = i * 1.7;
+  return out.set(b.x + Math.sin(t * 0.13 + s) * 5, b.y + Math.sin(t * 0.21 + s * 2) * 1.5, b.z + Math.cos(t * 0.11 + s) * 5);
+};
+
+// =====================================================================
+//  樹頂上方：閃著珠光的微觀葉片世界
+// =====================================================================
+function leafTexture() {
+  const S = 256, c = document.createElement('canvas'); c.width = c.height = S;
+  const g = c.getContext('2d'), img = g.createImageData(S, S);
+  const seeds = []; for (let i = 0; i < 70; i++) seeds.push([rand(0, S), rand(0, S)]);
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const u = (x / S) * 2 - 1, v = (y / S) * 2 - 1;
+    const inside = (u * u) / 0.36 + (v * v) / Math.max(0.01, 1 - Math.abs(v) * 0.15) < 1 && Math.abs(u) < 0.6 * Math.cos(v * 1.45);
+    let d1 = 1e9, d2 = 1e9;
+    for (const [sx, sy] of seeds) { const d = (x - sx) ** 2 + (y - sy) ** 2; if (d < d1) { d2 = d1; d1 = d; } else if (d < d2) d2 = d; }
+    const wall = 1 - Math.min(1, (Math.sqrt(d2) - Math.sqrt(d1)) / 3.5);
+    const vein = Math.max(1 - Math.abs(u) * 40, 1 - Math.abs(Math.abs(u) - Math.abs((v + 1) * 0.35 % 0.35) * 1.2) * 30) * 0.6;
+    const k = inside ? Math.min(1, 0.12 + wall * 0.8 + Math.max(0, vein)) : 0;
+    const i = (y * S + x) * 4;
+    img.data[i] = 255 * k * 0.75; img.data[i + 1] = 255 * k; img.data[i + 2] = 255 * k * 0.85; img.data[i + 3] = 255 * k;
+  }
+  g.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
+const leafTex = leafTexture();
+const LEAF_C = V(0, 23, 0);
+for (let i = 0; i < 6; i++) {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({
+    map: leafTex, color: new THREE.Color().setHSL(rand(0.3, 0.42), 0.6, 0.6), transparent: true, opacity: 0.5,
+    depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending }));
+  const s = rand(6, 11);
+  m.scale.set(s, s, 1);
+  m.position.set(LEAF_C.x + rand(-7, 7), LEAF_C.y + rand(-2, 3), LEAF_C.z + rand(-7, 7));
+  m.rotation.set(rand(-1.3, -0.4), rand(0, TAU), rand(-0.5, 0.5));
+  scene.add(m);
+}
+const cells = new Pts();
+for (let i = 0; i < 2200; i++) {
+  const v = randInSphere(11); v.y *= 0.45;
+  cells.add(LEAF_C.x + v.x, LEAF_C.y + v.y, LEAF_C.z + v.z, rnd() < 0.8 ? hsl(rand(0.28, 0.4), 0.8, rand(0.4, 0.6)) : hsl(rand(0.75, 0.9), 0.5, 0.7), rand(0.04, 0.09));
+}
+cells.build(pointMat({ opacity: 0.9, drift: 0.3, drop: true, maxSize: 70, far: 30 }));
+
+// 雲：波光粼粼的混濁雲團
+const clouds = new Pts(), sparkle = new Pts();
 for (let c = 0; c < 26; c++) {
-  const a = rand(0, Math.PI * 2), r = Math.sqrt(rnd()) * 42;
-  const cx = Math.cos(a) * r, cy = rand(26, 44), cz = Math.sin(a) * r;
+  const [cx, cz] = ringPoint(0, 42), cy = rand(31, 46);
   for (let i = 0; i < 70; i++) {
     const v = randInSphere(1);
-    clouds.add(cx + v.x * 7, cy + v.y * 2.5, cz + v.z * 7, hsl(0.58, 0.15, rand(0.45, 0.65)), rand(2, 5));
+    clouds.add(cx + v.x * 7, cy + v.y * 2.5, cz + v.z * 7, hsl(rand(0.96, 1.04) % 1, 0.18, rand(0.45, 0.65)), rand(2, 5));
+  }
+  for (let i = 0; i < 40; i++) {
+    const v = randInSphere(1);
+    sparkle.add(cx + v.x * 8, cy + v.y * 3, cz + v.z * 8, hsl(0.1, 0.3, 0.85), 0.04);
   }
 }
 clouds.build(pointMat({ opacity: 0.12, far: 60, drift: 0.6, maxSize: 380 }));
+sparkle.build(pointMat({ opacity: 1, far: 50, drift: 0.8 }));
 
-// 地底：土壤、岩石、礦物
-const soil = new Pts(), rocks = new Pts(), minerals = new Pts();
+// =====================================================================
+//  地底：栩栩如生的岩石、礦物與根系
+// =====================================================================
 const BOX = 36, inBox = () => [rand(0, BOX), rand(0, BOX), rand(0, BOX)];
-for (let i = 0; i < 6000; i++) { const [x, y, z] = inBox(); soil.add(x, y, z, hsl(rand(0.06, 0.09), 0.45, rand(0.12, 0.24)), 0.07); }
-for (let k = 0; k < 22; k++) {
-  const a = rand(0, Math.PI * 2), r = Math.sqrt(rnd()) * 40;
-  const c = new THREE.Vector3(Math.cos(a) * r, rand(-22, -3), Math.sin(a) * r);
-  const s = new THREE.Vector3(rand(1.5, 4), rand(1, 2.5), rand(1.5, 4));
-  for (let i = 0; i < 420; i++) {
-    const v = randInSphere(1).normalize().multiply(s).add(c);
-    rocks.add(v.x, v.y, v.z, hsl(0.08, 0.1, rand(0.28, 0.42)), 0.08);
-  }
-}
-for (let i = 0; i < 900; i++) { const [x, y, z] = inBox(); minerals.add(x, y, z, hsl(rand(0.1, 0.14), 0.9, 0.6), 0.04); }
-soil.build(pointMat({ opacity: 0.8, wrap: { box: BOX, y0: -28, y1: -0.5 } }));
-rocks.build(pointMat({ opacity: 0.8, far: 34 }));
+const soil = new Pts(), minerals = new Pts();
+for (let i = 0; i < 6000; i++) { const [x, y, z] = inBox(); soil.add(x, y, z, hsl(rand(0.05, 0.09), 0.5, rand(0.12, 0.24)), 0.07); }
+for (let i = 0; i < 900; i++) { const [x, y, z] = inBox(); minerals.add(x, y, z, hsl(rand(0.08, 0.13), 0.9, 0.62), 0.04); }
+soil.build(pointMat({ opacity: 0.75, wrap: { box: BOX, y0: -28, y1: -0.5 } }));
 minerals.build(pointMat({ opacity: 1, drift: 0.05, wrap: { box: BOX, y0: -28, y1: -0.5 } }));
 
-// 深海：浮游光點與環狀微生物
-const plankton = new Pts(), micro = new Pts();
-for (let i = 0; i < 9000; i++) { const [x, y, z] = inBox(); plankton.add(x, y, z, hsl(rand(0.5, 0.6), 0.75, rand(0.28, 0.5)), 0.05); }
-for (let k = 0; k < 600; k++) {
-  const a = rand(0, Math.PI * 2), r = Math.sqrt(rnd()) * 44;
-  const c = new THREE.Vector3(Math.cos(a) * r, rand(-70, -32), Math.sin(a) * r);
-  const n = randInSphere(1).normalize();
-  const u = new THREE.Vector3().crossVectors(n, Math.abs(n.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0)).normalize();
-  const w = new THREE.Vector3().crossVectors(n, u);
-  const rr = rand(0.3, 1.2), col = hsl(rand(0.45, 0.85), 0.6, 0.55);
-  for (let i = 0; i < 16; i++) {
-    const t = (i / 16) * Math.PI * 2;
-    const p = c.clone().addScaledVector(u, Math.cos(t) * rr).addScaledVector(w, Math.sin(t) * rr);
-    micro.add(p.x, p.y, p.z, col, 0.05);
+// 半透明的岩石
+const rockGeo = new THREE.SphereGeometry(1, 28, 18);
+{
+  const p = rockGeo.attributes.position;
+  for (let i = 0; i < p.count; i++) {
+    const v = V(p.getX(i), p.getY(i), p.getZ(i));
+    const k = 1 + 0.18 * Math.sin(v.x * 3.1 + v.y * 1.7) + 0.12 * Math.sin(v.z * 4.3 - v.y * 2.2);
+    p.setXYZ(i, v.x * k, v.y * k, v.z * k);
+  }
+  rockGeo.computeVertexNormals();
+}
+const ROCKS = 26;
+const rocks = new THREE.InstancedMesh(rockGeo, crystalMat({ a: [0.06, 0.03, 0.01], b: [0.95, 0.55, 0.25], iri: 0.25, base: 0.05, shimmer: 0.35, far: 34 }), ROCKS);
+{
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion();
+  for (let i = 0; i < ROCKS; i++) {
+    const [x, z] = ringPoint(0, 40);
+    q.setFromEuler(new THREE.Euler(rand(0, TAU), rand(0, TAU), rand(0, TAU)));
+    m.compose(V(x, rand(-25, -6), z), q, V(rand(1.5, 4), rand(1, 2.5), rand(1.5, 4)));
+    rocks.setMatrixAt(i, m);
   }
 }
+rocks.frustumCulled = false; scene.add(rocks);
+
+// 森林的根系：細細的發光絲
+const rootLines = [], rootTubes = new Tubes();
+for (let i = 0; i < 24; i++) {
+  const [x, z] = ringPoint(8, 46);
+  grow(rootTubes, rootLines, rootNodes, V(x, 0, z), V(0, -1, 0), rand(3, 5), 0.12, 0,
+    { wiggle: 0.5, up: -0.04, spread: 1.2, bias: -0.2, sides: 4, maxDepth: 4, twigs: 3 });
+}
+rootTubes.build(crystalMat({ a: [0.05, 0.02, 0.0], b: [0.9, 0.5, 0.2], iri: 0.1, base: 0.05, far: 34 }));
+lineSet(rootLines, 0xffa060, 0.35);
+
+// =====================================================================
+//  深海：無邊的藍色深淵、白色流紋、透明的水母狀微生物
+// =====================================================================
+const plankton = new Pts();
+for (let i = 0; i < 9000; i++) { const [x, y, z] = inBox(); plankton.add(x, y, z, hsl(rand(0.52, 0.62), 0.75, rand(0.3, 0.52)), 0.05); }
 plankton.build(pointMat({ opacity: 0.85, drift: 0.6, wrap: { box: BOX, y0: -76, y1: -29 } }));
-micro.build(pointMat({ opacity: 1, far: 30, drift: 0.4 }));
+
+// 流紋：短短的白色線段，順著水流緩慢漂移
+{
+  const N = 2600, pos = [], ctr = [];
+  for (let i = 0; i < N; i++) {
+    const c = inBox(), L = rand(0.4, 1.6), d = V(1, rand(-0.25, 0.25), rand(-0.4, 0.4)).normalize().multiplyScalar(L / 2);
+    pos.push(c[0] - d.x, c[1] - d.y, c[2] - d.z, c[0] + d.x, c[1] + d.y, c[2] + d.z);
+    ctr.push(...c, ...c);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('aCenter', new THREE.Float32BufferAttribute(ctr, 3));
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uTime: U.uTime },
+    vertexShader: `uniform float uTime; attribute vec3 aCenter; varying float vA;
+      void main(){ float B = ${BOX.toFixed(1)};
+        vec3 c = aCenter + vec3(uTime*0.5, 0.0, uTime*0.15);
+        vec3 w = cameraPosition + mod(c - cameraPosition + 0.5*B, B) - 0.5*B;
+        vec3 p = w + (position - aCenter);
+        vec4 mv = viewMatrix * vec4(p, 1.0); gl_Position = projectionMatrix * mv;
+        float d = -mv.z;
+        vA = smoothstep(-76.0, -70.0, p.y) * (1.0 - smoothstep(-33.0, -29.0, p.y)) * (1.0 - smoothstep(6.0, 18.0, d)) * smoothstep(0.3, 1.5, d); }`,
+    fragmentShader: `varying float vA; void main(){ gl_FragColor = vec4(0.75, 0.88, 1.0, 0.45 * vA); }`,
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  });
+  const l = new THREE.LineSegments(g, mat); l.frustumCulled = false; scene.add(l);
+}
+const JELLY = 90;
+const jellies = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 16, 10, 0, TAU, 0, Math.PI / 2),
+  crystalMat({ a: [0.02, 0.05, 0.12], b: [0.55, 0.85, 1.0], iri: 0.6, base: 0.04, shimmer: 0.3, far: 30, pulse: true }), JELLY);
+{
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion();
+  for (let i = 0; i < JELLY; i++) {
+    const [x, z] = ringPoint(0, 45);
+    q.setFromEuler(new THREE.Euler(rand(-0.3, 0.3), rand(0, TAU), rand(-0.3, 0.3)));
+    const s = rand(0.3, 1.3);
+    m.compose(V(x, rand(-68, -34), z), q, V(s, s * 1.2, s));
+    jellies.setMatrixAt(i, m);
+  }
+}
+jellies.frustumCulled = false; scene.add(jellies);
 
 // ---------- 起點的笛卡兒網格 ----------
 const gridPos = [], GS = 3, GN = 4;
-const gc = START.clone().add(new THREE.Vector3(0, 1.6, 0));
+const gc = START.clone().add(V(0, 1.6, 0));
 for (let i = -GN; i <= GN; i++) for (let j = -GN; j <= GN; j++) {
   const a = i * GS, b = j * GS, e = GN * GS;
   gridPos.push(gc.x - e, gc.y + a, gc.z + b, gc.x + e, gc.y + a, gc.z + b);
@@ -301,7 +615,7 @@ for (let i = -GN; i <= GN; i++) for (let j = -GN; j <= GN; j++) {
 }
 const gridGeo = new THREE.BufferGeometry();
 gridGeo.setAttribute('position', new THREE.Float32BufferAttribute(gridPos, 3));
-const gridMat = new THREE.LineBasicMaterial({ color: 0x9fd8ff, transparent: true, opacity: 0.45, depthWrite: false });
+const gridMat = new THREE.LineBasicMaterial({ color: 0xdff4ff, transparent: true, opacity: 0.45, depthWrite: false });
 scene.add(new THREE.LineSegments(gridGeo, gridMat));
 
 // ---------- 文字層與程式碼層 ----------
@@ -320,7 +634,7 @@ function codeRing(y, radius, size, count, offset) {
     const tex = textTexture(src.slice(start, start + 28).map(s => s.slice(0, 64)));
     const m = new THREE.Mesh(new THREE.PlaneGeometry(size, size),
       new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.6, depthWrite: false, side: THREE.DoubleSide }));
-    const a = (k / count) * Math.PI * 2;
+    const a = (k / count) * TAU;
     m.position.set(Math.cos(a) * radius, y + rand(-2, 2), Math.sin(a) * radius);
     m.lookAt(0, m.position.y, 0);
     scene.add(m);
@@ -332,11 +646,11 @@ codeRing(69, 18, 8, 8, 5);
 const PHRASES = ['呼吸', '浮', '沉', '霧', '慢', '光在水裡慢慢說話', '根在黑暗中聆聽', '身體即介面', '裡 / 外', '心 / 身',
   '我在這裡', '一片葉子的內部', '水記得光', '吐氣，下沉', '吸氣，浮起', '座標正在溶解', '你看見的，都是你移動出來的',
   '這不是自然，是自然的影子', 'breath', 'earth', 'water', 'leaf', 'cloud', 'inside / outside', 'drift', 'stillness', 'being here'];
-PHRASES.forEach((p, i) => {
-  const tex = textTexture([p], { w: 1024, h: 160, font: '64px "PingFang TC", "Noto Sans TC", sans-serif', color: 'rgba(225,235,245,0.92)', lh: 80, center: true });
+PHRASES.forEach((p) => {
+  const tex = textTexture([p], { w: 1024, h: 160, font: '64px "PingFang TC", "Noto Sans TC", sans-serif', color: 'rgba(240,225,215,0.92)', lh: 80, center: true });
   const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
-  const a = rand(0, Math.PI * 2), r = rand(3, 30);
-  s.position.set(Math.cos(a) * r, rand(49, 64), Math.sin(a) * r);
+  const [x, z] = ringPoint(3, 30);
+  s.position.set(x, rand(50, 64), z);
   const sc = rand(5, 9); s.scale.set(sc, sc * 160 / 1024, 1);
   scene.add(s);
 });
@@ -345,8 +659,8 @@ PHRASES.forEach((p, i) => {
 const hintTex = (t) => textTexture(t, { w: 1024, h: 256, font: '44px "PingFang TC", "Noto Sans TC", sans-serif', color: 'rgba(230,240,245,0.95)', lh: 64, center: true });
 const HINTS = [
   hintTex(['身體輕輕前傾、後仰或側傾', '就會往那個方向漂']),
-  hintTex(['用嘴巴慢慢吐氣，會下沉', '停下來吸氣，就會慢慢浮起']),
-  hintTex(['按住扳機代替吐氣，會下沉', '放開就會慢慢浮起']),
+  hintTex(['用嘴巴吐氣會往下沉，吐得越多沉得越快', '抬頭往上看，就會慢慢浮起']),
+  hintTex(['按住扳機會往下沉，按得越深沉得越快', '抬頭往上看，就會慢慢浮起']),
 ];
 const hintMat = new THREE.SpriteMaterial({ map: HINTS[0], transparent: true, opacity: 0, depthTest: false, depthWrite: false, fog: false });
 const hint = new THREE.Sprite(hintMat);
@@ -356,9 +670,9 @@ const veilMat = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackS
 const veil = new THREE.Mesh(new THREE.SphereGeometry(0.3, 16, 12), veilMat);
 veil.renderOrder = 9999; camera.add(veil);
 
-// ---------- 依高度變化的天色 ----------
-const SKY = [[72, 0x07080f], [58, 0x0c1020], [35, 0x27313d], [14, 0x0b1a16], [2, 0x06110d], [-4, 0x0c0805],
-  [-24, 0x0a0603], [-32, 0x03152a], [-70, 0x010812], [-82, 0x000000]].map(([y, c]) => [y, new THREE.Color(c)]);
+// ---------- 依高度變化的天色（偏暖的銅色、玫瑰色；深海轉藍） ----------
+const SKY = [[72, 0x08070e], [58, 0x120d18], [46, 0x2a1f25], [32, 0x251a20], [26, 0x08140f], [18, 0x110909], [2, 0x120706],
+  [-3, 0x0f0704], [-24, 0x0c0503], [-32, 0x041030], [-70, 0x01061a], [-82, 0x000000]].map(([y, c]) => [y, new THREE.Color(c)]);
 function skyAt(y, out) {
   if (y >= SKY[0][0]) return out.copy(SKY[0][1]);
   for (let i = 0; i < SKY.length - 1; i++) {
@@ -368,69 +682,201 @@ function skyAt(y, out) {
   return out.copy(SKY[SKY.length - 1][1]);
 }
 
-// ---------- 聲音 ----------
+// =====================================================================
+//  聲音：每一層有自己的聲音；森林裡有立體定位的蟲鳴、蛙聲、蟲群
+//  （麥克風只分析 1–3.5 kHz 的氣流聲；蟲鳴在 4 kHz 以上，不會被誤認成吐氣）
+// =====================================================================
 let actx = null, bus = null, master = null, analyser = null, freqBuf = null, micOK = false;
 const layers = {};
-const ZONES = { text: [57, 10], cloud: [35, 9], forest: [6, 9], earth: [-13, 8], ocean: [-50, 18], code: [-80, 8] };
+const ZONES = { text: [57, 8], cloud: [38, 7], leaf: [23, 4], forest: [5, 9], earth: [-13, 8], ocean: [-50, 18], code: [-80, 8] };
 function zoneWeight(name, y) {
   const [c, w] = ZONES[name]; let v = Math.exp(-(((y - c) / w) ** 2));
   if (name === 'code') v = Math.max(v, Math.exp(-(((y - 69) / 5) ** 2)));
   return v;
 }
+const sources = { crickets: [], frogs: [], swarms: [], tree: null };
+let forestBus = null;
+function panner(x, y, z, ref = 2, roll = 1.3, dest = bus) {
+  const p = actx.createPanner();
+  p.panningModel = 'HRTF'; p.distanceModel = 'inverse'; p.refDistance = ref; p.maxDistance = 80; p.rolloffFactor = roll;
+  setPos(p, x, y, z); p.connect(dest); return p;
+}
+function setPos(p, x, y, z) {
+  if (p.positionX) { p.positionX.value = x; p.positionY.value = y; p.positionZ.value = z; } else p.setPosition(x, y, z);
+}
+function noiseBuffer() {
+  const b = actx.createBuffer(1, actx.sampleRate * 2, actx.sampleRate), d = b.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1; return b;
+}
+let NOISE = null;
 function initAudio() {
   actx = new (window.AudioContext || window.webkitAudioContext)();
+  NOISE = noiseBuffer();
   master = actx.createGain(); master.gain.value = 0;
-  const lp = actx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 750;  // 輸出保持低頻，避免被麥克風當成吐氣
-  master.connect(lp).connect(actx.destination);
+  const comp = actx.createDynamicsCompressor();
+  master.connect(comp).connect(actx.destination);
   bus = actx.createGain();
   const verb = actx.createConvolver();
   const len = actx.sampleRate * 3.5, ir = actx.createBuffer(2, len, actx.sampleRate);
   for (let ch = 0; ch < 2; ch++) { const d = ir.getChannelData(ch); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3); }
   verb.buffer = ir;
-  const wet = actx.createGain(); wet.gain.value = 0.5;
+  const wet = actx.createGain(); wet.gain.value = 0.45;
   bus.connect(master); bus.connect(verb).connect(wet).connect(master);
 
-  const drone = (freqs, type, vol) => {
+  const drone = (freqs, type, vol, lp = 900) => {
     const g = actx.createGain(); g.gain.value = 0;
-    freqs.forEach((f, i) => {
-      const o = actx.createOscillator(); o.type = type; o.frequency.value = f; o.detune.value = i % 2 ? 5 : -5;
+    const f = actx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = lp;
+    freqs.forEach((fr, i) => {
+      const o = actx.createOscillator(); o.type = type; o.frequency.value = fr; o.detune.value = i % 2 ? 5 : -5;
       const og = actx.createGain(); og.gain.value = vol / freqs.length;
       const l = actx.createOscillator(); l.frequency.value = 0.04 + Math.random() * 0.08;
       const lg = actx.createGain(); lg.gain.value = 0.5 * vol / freqs.length;
-      l.connect(lg).connect(og.gain); o.connect(og).connect(g); o.start(); l.start();
+      l.connect(lg).connect(og.gain); o.connect(og).connect(f); o.start(); l.start();
     });
-    g.connect(bus); return g;
+    f.connect(g); g.connect(bus); return g;
   };
   const noise = (type, freq, q, vol, lfo) => {
-    const b = actx.createBuffer(1, actx.sampleRate * 2, actx.sampleRate), d = b.getChannelData(0);
-    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
-    const s = actx.createBufferSource(); s.buffer = b; s.loop = true;
+    const s = actx.createBufferSource(); s.buffer = NOISE; s.loop = true;
     const f = actx.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q;
-    if (lfo) { const l = actx.createOscillator(); l.frequency.value = 0.08; const lg = actx.createGain(); lg.gain.value = freq * 0.5; l.connect(lg).connect(f.frequency); l.start(); }
+    if (lfo) { const l = actx.createOscillator(); l.frequency.value = lfo; const lg = actx.createGain(); lg.gain.value = freq * 0.5; l.connect(lg).connect(f.frequency); l.start(); }
     const g = actx.createGain(); g.gain.value = 0; const v = actx.createGain(); v.gain.value = vol;
     s.connect(f).connect(v).connect(g); g.connect(bus); s.start(); return g;
   };
-  layers.text = [drone([220, 277.2, 330], 'sine', 0.35)];
-  layers.cloud = [drone([196, 293.7], 'sine', 0.3), noise('bandpass', 350, 0.7, 0.25)];
-  layers.forest = [drone([110, 164.8, 246.9], 'triangle', 0.3)];
-  layers.earth = [drone([55, 82.4], 'sine', 0.6), noise('lowpass', 120, 0.5, 0.5)];
-  layers.ocean = [drone([73.4, 110], 'sine', 0.45), noise('lowpass', 280, 0.6, 0.45, true)];
-  layers.code = [drone([49, 98, 147], 'square', 0.12)];
+  // 一個以「啊」母音共振的合成人聲，呼應原作只用一男一女人聲取樣的聲音設計
+  const voice = (freqs, vol) => {
+    const g = actx.createGain(); g.gain.value = 0;
+    const f1 = actx.createBiquadFilter(); f1.type = 'bandpass'; f1.frequency.value = 700; f1.Q.value = 5;
+    const f2 = actx.createBiquadFilter(); f2.type = 'bandpass'; f2.frequency.value = 1100; f2.Q.value = 8;
+    const m = actx.createGain(); m.gain.value = vol;
+    freqs.forEach((fr) => {
+      const o = actx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = fr;
+      const vib = actx.createOscillator(); vib.frequency.value = 4.5 + Math.random(); const vg = actx.createGain(); vg.gain.value = 2;
+      vib.connect(vg).connect(o.frequency); vib.start();
+      o.connect(f1); o.connect(f2); o.start();
+    });
+    f1.connect(m); f2.connect(m); m.connect(g); g.connect(bus); return g;
+  };
+  layers.text = [voice([110, 165], 0.5), drone([220, 277.2, 330], 'sine', 0.25)];
+  layers.cloud = [noise('bandpass', 600, 0.5, 0.35, 0.07), drone([220, 277.2, 329.6], 'triangle', 0.22)];
+  layers.leaf = [drone([523.3, 659.3, 784], 'sine', 0.16, 1000)];
+  layers.forest = [noise('bandpass', 260, 0.8, 0.18), drone([110, 164.8], 'triangle', 0.18)];
+  layers.earth = [drone([45, 67.5], 'sine', 0.6), noise('lowpass', 110, 0.5, 0.55)];
+  layers.ocean = [drone([55, 82.4], 'sine', 0.4), noise('lowpass', 260, 0.6, 0.5, 0.08)];
+  layers.code = [drone([49, 98, 147], 'square', 0.1, 400)];
+
+  // 森林的立體聲源
+  forestBus = actx.createGain(); forestBus.gain.value = 0; forestBus.connect(bus);
+  for (let i = 0; i < 14; i++) {         // 蟋蟀
+    const [x, z] = ringPoint(6, 40);
+    const o = actx.createOscillator(); o.frequency.value = rand(4200, 5400);
+    const g = actx.createGain(); g.gain.value = 0;
+    o.connect(g).connect(panner(x, 0.2, z, 3, 1.1, forestBus)); o.start();
+    sources.crickets.push({ g, next: 0, amp: rand(0.05, 0.1), trill: rnd() < 0.3 });
+  }
+  for (let i = 0; i < 3; i++) {          // 池塘邊的青蛙
+    const a = rand(0, TAU);
+    const o = actx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = rand(110, 170);
+    const f = actx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 420; f.Q.value = 2.5;
+    const g = actx.createGain(); g.gain.value = 0;
+    o.connect(f).connect(g).connect(panner(POND.x + Math.cos(a) * 6, 0.2, POND.z + Math.sin(a) * 6, 3, 1.0, forestBus)); o.start();
+    sources.frogs.push({ g, next: rand(0, 4) });
+  }
+  SWARMS.forEach(() => {                  // 跟著昆蟲群移動的嗡嗡聲
+    const o = actx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = rand(170, 260);
+    const vib = actx.createOscillator(); vib.frequency.value = rand(5, 9); const vg = actx.createGain(); vg.gain.value = 9;
+    vib.connect(vg).connect(o.frequency); vib.start();
+    const f = actx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 650;
+    const g = actx.createGain(); g.gain.value = 0.05;
+    const p = panner(0, 0, 0, 1.2, 2.2);
+    o.connect(f).connect(g).connect(p); o.start();
+    sources.swarms.push(p);
+  });
+  sources.tree = panner(0, 6, 0, 6, 1.0);  // 水晶樹的鈴聲
 }
-function blip(f0, f1, dur, vol) {
+function blip(f0, f1, dur, vol, dest = bus) {
   const o = actx.createOscillator(), g = actx.createGain(), t = actx.currentTime;
   o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + dur * 0.3);
   g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(vol, t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-  o.connect(g).connect(bus); o.start(t); o.stop(t + dur + 0.05);
+  o.connect(g).connect(dest); o.start(t); o.stop(t + dur + 0.05);
 }
-const PENTA = [130.8, 146.8, 164.8, 196, 220, 261.6, 293.7, 329.6];
+function bell(f, vol, dest) {           // 水晶般的鈴聲（泛音比例 1 : 2.76）
+  const t = actx.currentTime;
+  [[1, 1], [2.76, 0.4], [0.5, 0.3]].forEach(([r, v]) => {
+    const o = actx.createOscillator(), g = actx.createGain(); o.frequency.value = f * r;
+    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(vol * v, t + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + 4.5);
+    o.connect(g).connect(dest); o.start(t); o.stop(t + 4.6);
+  });
+}
+function burst(freq, q, dur, vol) {     // 濾波雜訊的短促聲（根的嘎吱聲）
+  const s = actx.createBufferSource(); s.buffer = NOISE;
+  const f = actx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = freq; f.Q.value = q;
+  const g = actx.createGain(), t = actx.currentTime;
+  g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(vol, t + dur * 0.3); g.gain.linearRampToValueAtTime(0, t + dur);
+  s.connect(f).connect(g).connect(bus); s.start(t, Math.random()); s.stop(t + dur + 0.05);
+}
+function moan(vol) {                    // 深海裡低沉、滑動的長鳴
+  const o = actx.createOscillator(), g = actx.createGain(), t = actx.currentTime, f = rand(90, 160);
+  o.frequency.setValueAtTime(f, t); o.frequency.linearRampToValueAtTime(f * 1.6, t + 2); o.frequency.linearRampToValueAtTime(f * 0.8, t + 5);
+  g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(vol, t + 1.5); g.gain.linearRampToValueAtTime(0, t + 5.5);
+  o.connect(g).connect(bus); o.start(t); o.stop(t + 5.6);
+}
+const PENTA = [261.6, 293.7, 329.6, 392, 440];
+const tmpV = V(0, 0, 0), fwd = V(0, 0, 0), upv = V(0, 0, 0);
+function updateSound(dt, now) {
+  const t = actx.currentTime, L = actx.listener;
+  camera.getWorldDirection(fwd); upv.set(0, 1, 0).applyQuaternion(camera.getWorldQuaternion(new THREE.Quaternion()));
+  if (L.positionX) {
+    L.positionX.value = eye.x; L.positionY.value = eye.y; L.positionZ.value = eye.z;
+    L.forwardX.value = fwd.x; L.forwardY.value = fwd.y; L.forwardZ.value = fwd.z;
+    L.upX.value = upv.x; L.upY.value = upv.y; L.upZ.value = upv.z;
+  } else { L.setPosition(eye.x, eye.y, eye.z); L.setOrientation(fwd.x, fwd.y, fwd.z, upv.x, upv.y, upv.z); }
 
-// ---------- 麥克風：只偵測吐氣的氣流聲（1–6 kHz） ----------
+  audioTick -= dt;
+  const wf = zoneWeight('forest', eye.y);
+  if (audioTick <= 0) {
+    audioTick = 0.25;
+    for (const k in layers) { const w = zoneWeight(k, eye.y); layers[k].forEach(g => g.gain.setTargetAtTime(w, t, 0.8)); }
+    forestBus.gain.setTargetAtTime(Math.max(wf, 0.15 * zoneWeight('leaf', eye.y)), t, 0.8);
+  }
+  if (wf > 0.05) {
+    for (const c of sources.crickets) {     // 蟋蟀：一串短促的唧唧聲
+      if (t < c.next) continue;
+      const n = c.trill ? 12 : 3 + Math.floor(Math.random() * 2), on = 0.03, off = c.trill ? 0.02 : 0.035;
+      for (let i = 0; i < n; i++) {
+        const s = t + 0.05 + i * (on + off);
+        c.g.gain.setValueAtTime(0, s); c.g.gain.linearRampToValueAtTime(c.amp, s + 0.005);
+        c.g.gain.setValueAtTime(c.amp, s + on - 0.005); c.g.gain.linearRampToValueAtTime(0, s + on);
+      }
+      c.next = t + n * (on + off) + rand(0.4, 1.6);
+    }
+    for (const f of sources.frogs) {         // 青蛙：低沉的咕嚕聲
+      if (t < f.next) continue;
+      const n = 6 + Math.floor(Math.random() * 5);
+      for (let i = 0; i < n; i++) {
+        const s = t + 0.05 + i * 0.055;
+        f.g.gain.setValueAtTime(0, s); f.g.gain.linearRampToValueAtTime(0.35, s + 0.01); f.g.gain.linearRampToValueAtTime(0, s + 0.045);
+      }
+      f.next = t + rand(2.5, 7);
+    }
+  }
+  sources.swarms.forEach((p, i) => { swarmCenter(i, now, tmpV); setPos(p, tmpV.x, tmpV.y, tmpV.z); });
+  const dTree = Math.hypot(eye.x, eye.z);
+  if (dTree < 22 && eye.y > -12 && eye.y < 22 && Math.random() < dt * 0.4)
+    bell(PENTA[Math.floor(Math.random() * PENTA.length)] * (Math.random() < 0.5 ? 0.5 : 1), 0.12, sources.tree);
+  const we = zoneWeight('earth', eye.y), wo = zoneWeight('ocean', eye.y), wl = zoneWeight('leaf', eye.y);
+  if (we > 0.3 && Math.random() < dt * 0.35) burst(rand(150, 260), 7, rand(0.3, 0.8), 0.25 * we);
+  if (we > 0.3 && Math.random() < dt * 0.5) blip(rand(700, 900), 420, 0.25, 0.05 * we);
+  if (wo > 0.3 && Math.random() < dt * 0.12) moan(0.12 * wo);
+  if (wo > 0.3 && Math.random() < dt * 0.8) { const f = 160 + Math.random() * 120; blip(f, f * 2.4, 0.4, 0.05 * wo); }
+  if (wl > 0.3 && Math.random() < dt * 0.6) bell(rand(500, 800), 0.05 * wl, bus);
+}
+
+// ---------- 麥克風：只偵測吐氣的氣流聲（1–3.5 kHz） ----------
 const breath = { floor: -90, peak: -60, level: 0 };
 function micDb() {
   if (!analyser) return -120;
   analyser.getFloatFrequencyData(freqBuf);
-  const hz = actx.sampleRate / analyser.fftSize, a = Math.floor(1000 / hz), b = Math.floor(6000 / hz);
+  const hz = actx.sampleRate / analyser.fftSize, a = Math.floor(1000 / hz), b = Math.floor(3500 / hz);
   let s = 0; for (let i = a; i <= b; i++) s += Math.pow(10, freqBuf[i] / 10);
   return 10 * Math.log10(s / (b - a + 1) + 1e-20);
 }
@@ -441,6 +887,7 @@ async function initMic() {
   freqBuf = new Float32Array(analyser.frequencyBinCount);
   micOK = true;
 }
+
 let calibrating = false;
 function updateBreath(dt) {
   let raw = 0;
@@ -463,7 +910,12 @@ const state = { ref: new THREE.Vector3(), vel: new THREE.Vector3(), lungs: 0.62 
 const keys = {};
 addEventListener('keydown', (e) => { keys[e.key.toLowerCase()] = true; if (e.key === ' ') e.preventDefault(); });
 addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
-const target = new THREE.Vector3(), tmp = new THREE.Vector3();
+const target = new THREE.Vector3(), lookDir = new THREE.Vector3();
+const SINK_BASE = 0.05;                          // 不吐氣時的下沉速度（公尺／秒），非常輕微
+const SINK_EXHALE = 1.0;                         // 吐氣最大聲時額外的下沉速度
+const RISE_FROM = THREE.MathUtils.degToRad(20);  // 抬頭超過 20 度開始上浮
+const RISE_FULL = THREE.MathUtils.degToRad(55);  // 抬頭 55 度時上浮最快
+const RISE_MAX = 0.9;                            // 最快上浮速度
 function updateMove(dt, t, ending) {
   const head = camera.position;
   if (renderer.xr.isPresenting) {
@@ -479,9 +931,13 @@ function updateMove(dt, t, ending) {
     }
     const m = Math.hypot(ox, oz), s = smooth(0.05, 0.22, m) * 1.4;
     if (m > 1e-4) { target.x = ox / m * s; target.z = oz / m * s; }
-    const ex = breath.level;
-    state.lungs = Math.min(1, Math.max(0, state.lungs + (ex > 0.08 ? -0.32 * ex : 0.22) * dt));
-    target.y = THREE.MathUtils.clamp((state.lungs - 0.62) * 1.6, -1.1, 0.7);
+    // 上下：平常會非常緩慢地下沉；吐氣越大聲沉得越快；抬頭往上看就會浮起
+    const ex = breath.level > 0.06 ? breath.level : 0;
+    const sink = SINK_BASE + SINK_EXHALE * ex;
+    camera.getWorldDirection(lookDir);
+    const pitch = Math.asin(THREE.MathUtils.clamp(lookDir.y, -1, 1));
+    const rise = smooth(RISE_FROM, RISE_FULL, pitch) * RISE_MAX;
+    target.y = rise - sink;
   } else target.y = 0.9;
   state.vel.lerp(target, 1 - Math.exp(-dt / 1.4));
   rig.position.addScaledVector(state.vel, dt);
@@ -522,16 +978,7 @@ renderer.setAnimationLoop(() => {
   camera.getWorldPosition(eye);
   skyAt(eye.y, sky); scene.background.copy(sky); scene.fog.color.copy(sky);
   gridMat.opacity = 0.45 * (1 - smooth(4, 14, eye.distanceTo(gc)));
-  if (actx && running) {
-    audioTick -= dt;
-    if (audioTick <= 0) {
-      audioTick = 0.25;
-      for (const k in layers) { const w = zoneWeight(k, eye.y); layers[k].forEach(g => g.gain.setTargetAtTime(w, actx.currentTime, 0.8)); }
-    }
-    const wf = zoneWeight('forest', eye.y), wo = zoneWeight('ocean', eye.y);
-    if (wf > 0.3 && Math.random() < dt * 0.6) blip(PENTA[Math.floor(Math.random() * PENTA.length)], PENTA[0] * 2, 2.2, 0.06 * wf);
-    if (wo > 0.3 && Math.random() < dt * 0.8) { const f = 180 + Math.random() * 120; blip(f, f * 2.4, 0.4, 0.05 * wo); }
-  }
+  if (actx && running) updateSound(dt, now);
   renderer.render(scene, camera);
 });
 
@@ -574,7 +1021,7 @@ $('btnRetry').onclick = calibrate;
 $('btnNoMic').onclick = async () => {
   if (!actx) initAudio();
   await actx.resume();
-  show('stepReady'); $('readyMsg').textContent = '進入 VR 後，按住手把扳機代替吐氣。';
+  show('stepReady'); $('readyMsg').textContent = '進入 VR 後，按住手把扳機代替吐氣；抬頭往上看就會浮起。';
 };
 
 if (navigator.xr) navigator.xr.isSessionSupported('immersive-vr').then(ok => {
