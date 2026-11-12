@@ -34,7 +34,7 @@
 <body>
 <div id="panel"><div class="card">
   <h1>Osmose 習作</h1>
-  <p class="sub">向 Char Davies《Osmose》（1995）致敬的呼吸式 VR · 約 8 分鐘</p>
+  <p class="sub">向 Char Davies《Osmose》（1995）致敬的呼吸式 VR · 約 6 分鐘</p>
 
   <div id="stepIntro">
     <ul>
@@ -71,7 +71,7 @@ import * as THREE from 'three';
 
 // ---------- 基本設定 ----------
 const DEBUG = new URLSearchParams(location.search).has('debug');
-const TOTAL = 480;          // 總長約 8 分鐘
+const TOTAL = 360;          // 總長最多約 6 分鐘
 const TOP_EYE = 70;         // 結尾停留的高度（最上層的程式碼環中）
 const START = new THREE.Vector3(0, 6, 38);
 const EYE_MIN = -88, EYE_MAX = 72, WORLD_R = 50;
@@ -152,7 +152,7 @@ void main() {
   gl_Position = projectionMatrix * mv;
   gl_PointSize = clamp(2.4 * aSize * uPixel / d, 1.5, uMaxSize);
   float tw = 0.7 + 0.3 * sin(uTime*1.3 + aPhase*20.0);
-  vAlpha = flick * band * tw * smoothstep(0.15, 1.2, d) * (1.0 - smoothstep(uFar*0.35, uFar, d));
+  vAlpha = flick * band * tw * smoothstep(0.6, 2.2, d) * (1.0 - smoothstep(uFar*0.35, uFar, d));
   vColor = aColor * 2.2;
 }`;
 const PFS = `
@@ -242,7 +242,7 @@ void main() {
   vec3 col = mix(uColA, uColB, f) + uIri * iri * f;
   float sh = 1.0 - uShimmer + uShimmer * (0.5 + 0.5 * sin(vW.y * 3.0 - uTime * 1.2 + vW.x * 1.7 + vW.z * 1.3));
   float a = (uBase + (1.0 - uBase) * f) * sh * uOpacity;
-  a *= smoothstep(0.1, 0.8, vD) * (1.0 - smoothstep(uFar * 0.4, uFar, vD));
+  a *= smoothstep(0.4, 1.6, vD) * (1.0 - smoothstep(uFar * 0.4, uFar, vD));
   gl_FragColor = vec4(col, a);
 }`;
 function crystalMat({ a = [0.2, 0.1, 0.08], b = [1, 0.7, 0.55], opacity = 1, far = 60, iri = 0.4, base = 0.05, shimmer = 0.4, sway = false, pulse = false } = {}) {
@@ -356,7 +356,7 @@ for (let i = 0; i < 140; i++) {
   const [x, z] = ringPoint(1.5, 16);
   orbs.add(x, rand(-1.5, 2.5), z, rnd() < 0.5 ? hsl(0.97, 0.6, 0.72) : hsl(0.08, 0.4, 0.8), rand(0.18, 0.5));
 }
-orbs.build(pointMat({ opacity: 0.55, drift: 0.35, maxSize: 160, drop: true, far: 50 }));
+orbs.build(pointMat({ opacity: 0.55, drift: 0.35, maxSize: 110, drop: true, far: 50 }));
 
 // =====================================================================
 //  繁密黑暗的森林：半透明的暗色樹影、蕨類底層、落葉、苔光
@@ -481,7 +481,7 @@ for (let i = 0; i < 900; i++) {
   const [x, z] = ringPoint(0, 46);
   dew.add(x, rand(0.3, 14), z, rnd() < 0.7 ? hsl(rand(0.48, 0.55), 0.5, 0.8) : hsl(0.95, 0.5, 0.82), rand(0.06, 0.13));
 }
-dew.build(pointMat({ opacity: 0.85, drift: 0.5, maxSize: 90, drop: true, far: 36 }));
+dew.build(pointMat({ opacity: 0.85, drift: 0.5, maxSize: 60, drop: true, far: 36 }));
 
 // 半透明的昆蟲群
 // 昆蟲群聚集在世界中央的垂直軸附近（水晶樹四周、以及從起點過來的路上），上下穿越時有機會穿過牠們
@@ -673,14 +673,36 @@ function textTexture(lines, { w = 1024, h = 1024, font = '26px Menlo, monospace'
 }
 // 程式碼層：用這個作品自己的原始碼，揭露幻覺的來源
 const src = document.getElementById('osmose-src').textContent.split('\n').map(s => s.replace(/\t/g, '  ')).filter(s => s.trim());
+// 程式碼的材質：字本身很暗，只當成紋理；一道道亮光沿著每一行掃過去，另有一條緩慢的掃描帶上下移動
+function codeMat(tex, seedN) {
+  return new THREE.ShaderMaterial({
+    uniforms: { map: { value: tex }, uTime: U.uTime, uSeed: { value: seedN } },
+    vertexShader: `varying vec2 vUv; varying float vD;
+      void main(){ vUv = uv; vec4 mv = modelViewMatrix * vec4(position, 1.0); vD = -mv.z; gl_Position = projectionMatrix * mv; }`,
+    fragmentShader: `uniform sampler2D map; uniform float uTime, uSeed; varying vec2 vUv; varying float vD;
+      float h(float n){ return fract(sin(n * 127.1 + uSeed * 31.7) * 43758.5453); }
+      void main(){
+        float g = texture2D(map, vUv).a; if (g < 0.03) discard;
+        float row = floor(((1.0 - vUv.y) * 1024.0 - 20.0) / 34.0);
+        float sp = 0.12 + 0.4 * h(row), pos = fract(uTime * sp + h(row + 7.0)) * 1.4 - 0.2;
+        float streak = exp(-pow((vUv.x - pos) * 7.0, 2.0)) * step(0.3, h(row + 3.0));
+        float trail = smoothstep(pos - 0.35, pos, vUv.x) * step(vUv.x, pos) * 0.35 * step(0.3, h(row + 3.0));
+        float scan = exp(-pow((fract(vUv.y - uTime * 0.07) - 0.5) * 9.0, 2.0));
+        float flick = 0.75 + 0.25 * sin(uTime * 6.0 + row * 1.7 + uSeed);
+        vec3 col = vec3(0.15, 1.0, 0.55) * (0.22 * flick + 0.45 * scan + trail) + vec3(0.85, 1.0, 0.92) * streak * 1.5;
+        float a = g * (0.22 + streak + trail + 0.35 * scan) * (1.0 - smoothstep(32.0, 48.0, vD));
+        gl_FragColor = vec4(col, min(a, 1.0));
+      }`,
+    transparent: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+  });
+}
 const codeRings = [];
 function codeRing(y, radius, size, count, offset) {
   const grp = new THREE.Group(); scene.add(grp); codeRings.push(grp);
   for (let k = 0; k < count; k++) {
     const start = ((k + offset) * 28) % Math.max(1, src.length - 28);
     const tex = textTexture(src.slice(start, start + 28).map(s => s.slice(0, 64)));
-    const m = new THREE.Mesh(new THREE.PlaneGeometry(size, size),
-      new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.6, depthWrite: false, side: THREE.DoubleSide }));
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(size, size), codeMat(tex, k + offset * 13));
     const a = (k / count) * TAU;
     m.position.set(Math.cos(a) * radius, y + rand(-2, 2), Math.sin(a) * radius);
     m.lookAt(0, m.position.y, 0);
@@ -746,7 +768,7 @@ const sources = { crickets: [], frogs: [], swarms: [], tree: null };
 let forestBus = null;
 function panner(x, y, z, ref = 2, roll = 1.3, dest = bus) {
   const p = actx.createPanner();
-  p.panningModel = 'HRTF'; p.distanceModel = 'inverse'; p.refDistance = ref; p.maxDistance = 80; p.rolloffFactor = roll;
+  p.panningModel = 'equalpower'; p.distanceModel = 'inverse'; p.refDistance = ref; p.maxDistance = 80; p.rolloffFactor = roll;
   setPos(p, x, y, z); p.connect(dest); return p;
 }
 function setPos(p, x, y, z) {
@@ -758,14 +780,14 @@ function noiseBuffer() {
 }
 let NOISE = null;
 function initAudio() {
-  actx = new (window.AudioContext || window.webkitAudioContext)();
+  actx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'playback' });  // 較大的緩衝，減少爆音
   NOISE = noiseBuffer();
   master = actx.createGain(); master.gain.value = 0;
   const comp = actx.createDynamicsCompressor();
   master.connect(comp).connect(actx.destination);
   bus = actx.createGain();
   const verb = actx.createConvolver();
-  const len = actx.sampleRate * 3.5, ir = actx.createBuffer(2, len, actx.sampleRate);
+  const len = actx.sampleRate * 2.2, ir = actx.createBuffer(2, len, actx.sampleRate);
   for (let ch = 0; ch < 2; ch++) { const d = ir.getChannelData(ch); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3); }
   verb.buffer = ir;
   const wet = actx.createGain(); wet.gain.value = 0.45;
@@ -814,7 +836,7 @@ function initAudio() {
 
   // 森林的立體聲源
   forestBus = actx.createGain(); forestBus.gain.value = 0; forestBus.connect(bus);
-  for (let i = 0; i < 14; i++) {         // 蟋蟀
+  for (let i = 0; i < 8; i++) {          // 蟋蟀
     const [x, z] = ringPoint(6, 40);
     const o = actx.createOscillator(); o.frequency.value = rand(4200, 5400);
     const g = actx.createGain(); g.gain.value = 0;
@@ -865,12 +887,11 @@ function voiceGroup(freq, dest, gain) {      // 三個略微走音的鋸齒波�
     pre.connect(bp).connect(ag).connect(g);
   });
   const nodes = [];
-  for (let k = 0; k < 3; k++) {
-    const o = actx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = freq; o.detune.value = (k - 1) * 9 + (Math.random() - 0.5) * 4;
-    const vib = actx.createOscillator(); vib.frequency.value = 4.6 + Math.random() * 1.2;
-    const vg = actx.createGain(); vg.gain.value = freq * 0.006;
-    vib.connect(vg).connect(o.frequency);
-    o.connect(pre); o.start(); vib.start(); nodes.push(o, vib);
+  const vib = actx.createOscillator(); vib.frequency.value = 4.6 + Math.random() * 1.2;   // 兩個聲部共用一個顫音
+  const vg = actx.createGain(); vg.gain.value = freq * 0.006; vib.connect(vg); vib.start(); nodes.push(vib);
+  for (let k = 0; k < 2; k++) {
+    const o = actx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = freq; o.detune.value = (k ? 7 : -7) + (Math.random() - 0.5) * 4;
+    vg.connect(o.frequency); o.connect(pre); o.start(); nodes.push(o);
   }
   const lp = actx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 3200;
   g.connect(lp).connect(dest);
@@ -1059,7 +1080,7 @@ function ascend(dt, t) {
 }
 // 依照現在的深度決定何時開始回程，確保在 5 分鐘左右抵達頂端
 function shouldEnd(t) {
-  if (t < 150) return false;
+  if (t < 90) return false;
   const need = Math.max(0, TOP_EYE - (rig.position.y + camera.position.y)) / ASC_V + 14;
   return t >= TOTAL - 10 - need;
 }
@@ -1076,11 +1097,13 @@ renderer.setAnimationLoop(() => {
 
   if (running) {
     const t = now - tStart;
-    if (endingAt === null && shouldEnd(t)) endingAt = t;
+    // 時間到了會自動回程；如果體驗者自己浮到最上層，也直接進入結尾
+    if (endingAt === null && (shouldEnd(t) || (t > 30 && rig.position.y + camera.position.y >= TOP_EYE - 1))) endingAt = t;
     const ending = endingAt !== null, arrived = asc && asc.arrived !== null ? asc.arrived : null;
     updateMove(dt, t, ending);
     // 淡入（0–4 秒）；抵達頂端後停留片刻再淡出
-    veilMat.opacity = ending ? (arrived !== null ? smooth(arrived + 3, arrived + 10, t) : 0) : 1 - smooth(0, 4, t);
+    const fadeAt = arrived !== null ? Math.max(arrived + 3, endingAt + 12) : null;   // 讓結尾的字至少顯示完再淡出
+    veilMat.opacity = ending ? (fadeAt !== null ? smooth(fadeAt, fadeAt + 7, t) : 0) : 1 - smooth(0, 4, t);
     // 提示文字
     const second = micOK ? HINTS[1] : HINTS[2];
     if (ending) {
@@ -1091,8 +1114,8 @@ renderer.setAnimationLoop(() => {
       hintMat.opacity = t < 15 ? smooth(4, 7, t) * (1 - smooth(13, 15, t)) : smooth(15, 17, t) * (1 - smooth(27, 30, t));
     }
     if (ending && !endingStarted && actx) { endingStarted = true; endingCue(); }
-    if (arrived !== null && t > arrived + 3 && !fadeStarted && actx) { fadeStarted = true; master.gain.setTargetAtTime(0, actx.currentTime, 2.5); }
-    if (arrived !== null && t > arrived + 11 && !finished) finish();
+    if (fadeAt !== null && t > fadeAt && !fadeStarted && actx) { fadeStarted = true; master.gain.setTargetAtTime(0, actx.currentTime, 2.5); }
+    if (fadeAt !== null && t > fadeAt + 8 && !finished) finish();
   } else if (!DEBUG) {
     camera.rotation.y = now * 0.03; // 開始前的背景緩慢旋轉
     veilMat.opacity = 0;
@@ -1160,7 +1183,7 @@ function begin() {
   rig.position.copy(START); state.vel.set(0, 0, 0); state.lungs = 0.62;
   camera.rotation.set(0, 0, 0);
   running = true; tStart = clock.elapsedTime; updatePixelScale();
-  if (actx) { actx.resume(); master.gain.cancelScheduledValues(actx.currentTime); master.gain.setTargetAtTime(0.6, actx.currentTime, 1.5); }
+  if (actx) { actx.resume(); master.gain.cancelScheduledValues(actx.currentTime); master.gain.setTargetAtTime(0.45, actx.currentTime, 1.5); }
 }
 function finish() {
   finished = true; running = false;
