@@ -72,7 +72,8 @@ import * as THREE from 'three';
 // ---------- 基本設定 ----------
 const DEBUG = new URLSearchParams(location.search).has('debug');
 const TOTAL = 300;          // 總長 5 分鐘
-const ENDING = 270;         // 最後 30 秒自動上浮、淡出
+const ENDING = 230;         // 最後 70 秒：自動帶回最上層，回顧整段旅程
+const TOP_EYE = 70;         // 結尾停留的高度（最上層的程式碼環中）
 const START = new THREE.Vector3(0, 6, 38);
 const EYE_MIN = -88, EYE_MAX = 72, WORLD_R = 50;
 const TAU = Math.PI * 2;
@@ -141,7 +142,7 @@ void main() {
 #endif
 #ifdef SWARM
   // 昆蟲群：整群沿著緩慢的曲線漂移，每隻蟲繞著群中心快速飛舞、翅膀閃爍
-  vec3 c = aBase + vec3(sin(uTime*0.13 + aSwarm)*5.0, sin(uTime*0.21 + aSwarm*2.0)*1.5, cos(uTime*0.11 + aSwarm)*5.0);
+  vec3 c = aBase + vec3(sin(uTime*0.13 + aSwarm)*2.5, sin(uTime*0.21 + aSwarm*2.0)*1.0, cos(uTime*0.11 + aSwarm)*2.5);
   float s1 = 0.7 + aPhase * 1.4;
   p = c + vec3(position.x * sin(uTime*s1 + aPhase*40.0), position.y * sin(uTime*s1*1.3 + aPhase*17.0), position.z * cos(uTime*s1 + aPhase*40.0))
         + 0.07 * vec3(sin(uTime*23.0 + aPhase*90.0), sin(uTime*29.0 + aPhase*70.0), cos(uTime*19.0 + aPhase*50.0));
@@ -432,6 +433,49 @@ ground.build(pointMat({ opacity: 0.8 }));
 pond.build(pointMat({ opacity: 0.9, drift: 0.05 }));
 moss.build(pointMat({ opacity: 0.9, drift: 0.05, far: 30 }));
 
+// 菌絲：森林底層與樹根周圍一絲一絲、緩緩閃光的細線
+{
+  const pos = [], tt = [], sd = [], tips = new Pts();
+  const strand = (x, y, z, steps, dirA, depthBias) => {
+    let a = dirA, p = V(x, y, z), seedV = rnd();
+    for (let i = 0; i < steps; i++) {
+      a += rand(-0.45, 0.45);
+      const step = rand(0.18, 0.38);
+      const q = p.clone().add(V(Math.cos(a) * step, rand(-0.06, 0.05) + depthBias, Math.sin(a) * step));
+      q.y = Math.min(q.y, 0.15);
+      pos.push(p.x, p.y, p.z, q.x, q.y, q.z); tt.push(i / steps, (i + 1) / steps); sd.push(seedV, seedV);
+      if (rnd() < 0.08 && steps > 8) strand(q.x, q.y, q.z, Math.floor(steps * 0.5), a + rand(-1.2, 1.2), depthBias);
+      p = q;
+    }
+    tips.add(p.x, p.y, p.z, hsl(0.1, 0.4, 0.85), 0.03);
+  };
+  for (let i = 0; i < 1100; i++) {
+    const near = rnd() < 0.5;
+    const [x, z] = near ? ringPoint(0.5, 12) : ringPoint(4, 45);
+    strand(x, rand(-0.5, 0.12), z, 12 + Math.floor(rnd() * 14), rand(0, TAU), 0);
+  }
+  for (let i = 0; i < 160; i++) {          // 沿著水晶樹的根往地下延伸的菌絲
+    const [x, z] = ringPoint(0.3, 5);
+    strand(x, 0, z, 20, rand(0, TAU), -0.12);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('aT', new THREE.Float32BufferAttribute(tt, 1));
+  g.setAttribute('aSeed', new THREE.Float32BufferAttribute(sd, 1));
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uTime: U.uTime },
+    vertexShader: `uniform float uTime; attribute float aT; attribute float aSeed; varying float vA;
+      void main(){ vec3 p = position; p.y += 0.03 * sin(uTime*0.5 + aSeed*20.0 + aT*6.0);
+        vec4 mv = modelViewMatrix * vec4(p, 1.0); gl_Position = projectionMatrix * mv; float d = -mv.z;
+        float pulse = 0.5 + 0.5 * sin(aT*18.0 - uTime*1.2 + aSeed*30.0);
+        vA = (0.25 + 0.75 * pulse * pulse) * smoothstep(0.2, 1.0, d) * (1.0 - smoothstep(8.0, 26.0, d)); }`,
+    fragmentShader: `varying float vA; void main(){ gl_FragColor = vec4(1.0, 0.9, 0.78, vA * 0.6); }`,
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  });
+  const l = new THREE.LineSegments(g, mat); l.frustumCulled = false; scene.add(l);
+  tips.build(pointMat({ opacity: 0.9, drift: 0.02, far: 24, drop: true, maxSize: 30 }));
+}
+
 // 露珠：發光、緩緩掠過
 const dew = new Pts();
 for (let i = 0; i < 900; i++) {
@@ -441,19 +485,20 @@ for (let i = 0; i < 900; i++) {
 dew.build(pointMat({ opacity: 0.85, drift: 0.5, maxSize: 90, drop: true, far: 36 }));
 
 // 半透明的昆蟲群
-const SWARMS = [V(4, 5, 30), V(-8, 3, 20), V(10, 3, 8), V(-6, 2, -10), V(14, 3, -16), V(-20, 2.5, -4), V(2, 5, -24), V(-14, 4, 30), V(22, 3, 18)];
+// 昆蟲群聚集在世界中央的垂直軸附近（水晶樹四周、以及從起點過來的路上），上下穿越時有機會穿過牠們
+const SWARMS = [V(3, 2, 5), V(-4, 3.5, 3), V(2, 5.5, -4), V(-3, 8, -2), V(4, 10.5, 1), V(-2, 13, 4), V(0, 6.5, 13), V(1, 4, 22), V(-1, 7, 30)];
 const insects = new Pts();
 SWARMS.forEach((b, si) => {
-  for (let i = 0; i < 260; i++) {
-    const v = randInSphere(1); const r = rand(0.6, 2.8);
-    insects.add(v.x * r, v.y * r * 0.6, v.z * r, hsl(rand(0.12, 0.2), 0.7, rand(0.6, 0.78)), rand(0.03, 0.05));
+  for (let i = 0; i < 320; i++) {
+    const v = randInSphere(1); const r = rand(0.5, 2.4);
+    insects.add(v.x * r, v.y * r * 0.6, v.z * r, hsl(rand(0.12, 0.2), 0.7, rand(0.65, 0.82)), rand(0.04, 0.065));
     insects.base.push(b.x, b.y, b.z); insects.sw.push(si * 1.7);
   }
 });
 insects.build(pointMat({ opacity: 1, swarm: true, far: 40 }));
 const swarmCenter = (i, t, out) => {
   const b = SWARMS[i], s = i * 1.7;
-  return out.set(b.x + Math.sin(t * 0.13 + s) * 5, b.y + Math.sin(t * 0.21 + s * 2) * 1.5, b.z + Math.cos(t * 0.11 + s) * 5);
+  return out.set(b.x + Math.sin(t * 0.13 + s) * 2.5, b.y + Math.sin(t * 0.21 + s * 2) * 1.0, b.z + Math.cos(t * 0.11 + s) * 2.5);
 };
 
 // =====================================================================
@@ -628,7 +673,9 @@ function textTexture(lines, { w = 1024, h = 1024, font = '26px Menlo, monospace'
 }
 // 程式碼層：用這個作品自己的原始碼，揭露幻覺的來源
 const src = document.getElementById('osmose-src').textContent.split('\n').map(s => s.replace(/\t/g, '  ')).filter(s => s.trim());
+const codeRings = [];
 function codeRing(y, radius, size, count, offset) {
+  const grp = new THREE.Group(); scene.add(grp); codeRings.push(grp);
   for (let k = 0; k < count; k++) {
     const start = ((k + offset) * 28) % Math.max(1, src.length - 28);
     const tex = textTexture(src.slice(start, start + 28).map(s => s.slice(0, 64)));
@@ -637,7 +684,7 @@ function codeRing(y, radius, size, count, offset) {
     const a = (k / count) * TAU;
     m.position.set(Math.cos(a) * radius, y + rand(-2, 2), Math.sin(a) * radius);
     m.lookAt(0, m.position.y, 0);
-    scene.add(m);
+    grp.add(m);
   }
 }
 codeRing(-82, 20, 12, 10, 0);
@@ -661,6 +708,7 @@ const HINTS = [
   hintTex(['身體輕輕前傾、後仰或側傾', '就會往那個方向漂']),
   hintTex(['用嘴巴吐氣會往下沉，吐得越多沉得越快', '抬頭往上看，就會慢慢浮起']),
   hintTex(['按住扳機會往下沉，按得越深沉得越快', '抬頭往上看，就會慢慢浮起']),
+  hintTex(['旅程即將結束', '你會被慢慢帶回最上層，回顧經過的世界']),
 ];
 const hintMat = new THREE.SpriteMaterial({ map: HINTS[0], transparent: true, opacity: 0, depthTest: false, depthWrite: false, fog: false });
 const hint = new THREE.Sprite(hintMat);
@@ -807,6 +855,26 @@ function bell(f, vol, dest) {           // 水晶般的鈴聲（泛音比例 1 :
     o.connect(g).connect(dest); o.start(t); o.stop(t + 4.6);
   });
 }
+function endingCue() {                 // 結尾的聲音提示：上行的鈴聲＋逐漸湧起的和聲
+  const t = actx.currentTime;
+  [261.6, 329.6, 392, 523.3, 659.3, 784].forEach((f, i) => {
+    const o = actx.createOscillator(), g = actx.createGain(), s = t + i * 0.45;
+    o.frequency.value = f;
+    g.gain.setValueAtTime(0, s); g.gain.linearRampToValueAtTime(0.14, s + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, s + 3.5);
+    o.connect(g).connect(bus); o.start(s); o.stop(s + 3.6);
+  });
+  const pad = actx.createGain(); pad.gain.setValueAtTime(0, t); pad.gain.linearRampToValueAtTime(0.22, t + 8);
+  const lp = actx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.setValueAtTime(300, t); lp.frequency.linearRampToValueAtTime(1400, t + 40);
+  [130.8, 196, 261.6, 329.6, 392].forEach((f, i) => {
+    const o = actx.createOscillator(); o.type = 'triangle'; o.frequency.setValueAtTime(f, t);
+    o.frequency.linearRampToValueAtTime(f * 1.5, t + 60); o.detune.value = i % 2 ? 6 : -6;
+    o.connect(lp); o.start(t);
+  });
+  lp.connect(pad).connect(bus);
+  for (const k in layers) layers[k].forEach(g => g.gain.setTargetAtTime(0.0, t, 3)); // 各層聲音退後，讓和聲成為主角
+  endingMuted = true;
+}
+let endingMuted = false;
 function burst(freq, q, dur, vol) {     // 濾波雜訊的短促聲（根的嘎吱聲）
   const s = actx.createBufferSource(); s.buffer = NOISE;
   const f = actx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = freq; f.Q.value = q;
@@ -835,7 +903,7 @@ function updateSound(dt, now) {
   const wf = zoneWeight('forest', eye.y);
   if (audioTick <= 0) {
     audioTick = 0.25;
-    for (const k in layers) { const w = zoneWeight(k, eye.y); layers[k].forEach(g => g.gain.setTargetAtTime(w, t, 0.8)); }
+    for (const k in layers) { const w = zoneWeight(k, eye.y) * (endingMuted ? 0.35 : 1); layers[k].forEach(g => g.gain.setTargetAtTime(w, t, 0.8)); }
     forestBus.gain.setTargetAtTime(Math.max(wf, 0.15 * zoneWeight('leaf', eye.y)), t, 0.8);
   }
   if (wf > 0.05) {
@@ -894,7 +962,7 @@ function updateBreath(dt) {
   if (micOK) {
     const db = micDb();
     raw = calibrating ? Math.min(1, Math.max(0, (db + 100) / 60))
-      : Math.min(1, Math.max(0, (db - breath.floor - 3) / Math.max(3, breath.peak - breath.floor - 3)));
+      : Math.pow(Math.min(1, Math.max(0, (db - breath.floor - 2) / Math.max(3, (breath.peak - breath.floor) * 0.6))), 0.7);
   }
   if (DEBUG && keys[' ']) raw = 1;
   const session = renderer.xr.getSession();
@@ -911,8 +979,8 @@ const keys = {};
 addEventListener('keydown', (e) => { keys[e.key.toLowerCase()] = true; if (e.key === ' ') e.preventDefault(); });
 addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
 const target = new THREE.Vector3(), lookDir = new THREE.Vector3();
-const SINK_BASE = 0.05;                          // 不吐氣時的下沉速度（公尺／秒），非常輕微
-const SINK_EXHALE = 1.0;                         // 吐氣最大聲時額外的下沉速度
+const SINK_BASE = 0.025;                         // 不吐氣時的下沉速度（公尺／秒），非常輕微
+const SINK_EXHALE = 1.5;                         // 吐氣最大聲時額外的下沉速度
 const RISE_FROM = THREE.MathUtils.degToRad(20);  // 抬頭超過 20 度開始上浮
 const RISE_FULL = THREE.MathUtils.degToRad(55);  // 抬頭 55 度時上浮最快
 const RISE_MAX = 0.9;                            // 最快上浮速度
@@ -932,14 +1000,17 @@ function updateMove(dt, t, ending) {
     const m = Math.hypot(ox, oz), s = smooth(0.05, 0.22, m) * 1.4;
     if (m > 1e-4) { target.x = ox / m * s; target.z = oz / m * s; }
     // 上下：平常會非常緩慢地下沉；吐氣越大聲沉得越快；抬頭往上看就會浮起
-    const ex = breath.level > 0.06 ? breath.level : 0;
+    const ex = breath.level > 0.04 ? breath.level : 0;
     const sink = SINK_BASE + SINK_EXHALE * ex;
     camera.getWorldDirection(lookDir);
     const pitch = Math.asin(THREE.MathUtils.clamp(lookDir.y, -1, 1));
     const rise = smooth(RISE_FROM, RISE_FULL, pitch) * RISE_MAX;
     target.y = rise - sink;
-  } else target.y = 0.9;
-  state.vel.lerp(target, 1 - Math.exp(-dt / 1.4));
+  } else { ascend(t); return; }
+  // 水平慢慢加速；垂直反應快一點，吐氣時能立刻感覺到下沉
+  const kh = 1 - Math.exp(-dt / 1.4), kv = 1 - Math.exp(-dt / 0.7);
+  state.vel.x += (target.x - state.vel.x) * kh; state.vel.z += (target.z - state.vel.z) * kh;
+  state.vel.y += (target.y - state.vel.y) * kv;
   rig.position.addScaledVector(state.vel, dt);
   const eyeY = rig.position.y + head.y;
   if (eyeY > EYE_MAX) { rig.position.y = EYE_MAX - head.y; state.vel.y = Math.min(0, state.vel.y); }
@@ -948,9 +1019,21 @@ function updateMove(dt, t, ending) {
   if (r > WORLD_R) { rig.position.x *= WORLD_R / r; rig.position.z *= WORLD_R / r; }
 }
 
+// 結尾：把體驗者從所在位置緩緩帶回最上層，途中經過每一層
+let asc = null;
+function ascend(t) {
+  const head = camera.position;
+  if (!asc) asc = { x: rig.position.x, y: rig.position.y, z: rig.position.z, t0: t };
+  const kY = smooth(asc.t0, TOTAL - 12, t), kXZ = smooth(asc.t0, asc.t0 + 25, t);
+  rig.position.y = asc.y + (TOP_EYE - head.y - asc.y) * kY;
+  rig.position.x = asc.x + (3 - asc.x) * kXZ;     // 靠近中央的水晶樹，從它身旁上升
+  rig.position.z = asc.z + (4 - asc.z) * kXZ;
+  state.vel.set(0, 0, 0);
+}
+
 // ---------- 主迴圈 ----------
 const clock = new THREE.Clock();
-let running = false, tStart = 0, finished = false, audioTick = 0, endingStarted = false;
+let running = false, tStart = 0, finished = false, audioTick = 0, endingStarted = false, fadeStarted = false;
 const eye = new THREE.Vector3(), sky = new THREE.Color();
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.1), now = clock.elapsedTime;
@@ -962,12 +1045,18 @@ renderer.setAnimationLoop(() => {
     const t = now - tStart, ending = t > ENDING;
     updateMove(dt, t, ending);
     // 淡入（0–4 秒）與淡出（最後 30 秒）
-    veilMat.opacity = ending ? smooth(ENDING, TOTAL - 2, t) : 1 - smooth(0, 4, t);
+    veilMat.opacity = ending ? smooth(TOTAL - 9, TOTAL - 1, t) : 1 - smooth(0, 4, t);
     // 提示文字
     const second = micOK ? HINTS[1] : HINTS[2];
-    hintMat.map = t < 15 ? HINTS[0] : second;
-    hintMat.opacity = t < 15 ? smooth(4, 7, t) * (1 - smooth(13, 15, t)) : smooth(15, 17, t) * (1 - smooth(27, 30, t));
-    if (ending && !endingStarted && actx) { endingStarted = true; master.gain.setTargetAtTime(0, actx.currentTime, 8); }
+    if (ending) {
+      hintMat.map = HINTS[3];
+      hintMat.opacity = smooth(ENDING + 1, ENDING + 3, t) * (1 - smooth(ENDING + 9, ENDING + 11, t));
+    } else {
+      hintMat.map = t < 15 ? HINTS[0] : second;
+      hintMat.opacity = t < 15 ? smooth(4, 7, t) * (1 - smooth(13, 15, t)) : smooth(15, 17, t) * (1 - smooth(27, 30, t));
+    }
+    if (ending && !endingStarted && actx) { endingStarted = true; endingCue(); }
+    if (t > TOTAL - 10 && !fadeStarted && actx) { fadeStarted = true; master.gain.setTargetAtTime(0, actx.currentTime, 2.5); }
     if (t > TOTAL && !finished) finish();
   } else if (!DEBUG) {
     camera.rotation.y = now * 0.03; // 開始前的背景緩慢旋轉
@@ -978,6 +1067,7 @@ renderer.setAnimationLoop(() => {
   camera.getWorldPosition(eye);
   skyAt(eye.y, sky); scene.background.copy(sky); scene.fog.color.copy(sky);
   gridMat.opacity = 0.45 * (1 - smooth(4, 14, eye.distanceTo(gc)));
+  for (const g of codeRings) { g.position.x = eye.x; g.position.z = eye.z; }  // 程式碼環永遠以體驗者為中心
   if (actx && running) updateSound(dt, now);
   renderer.render(scene, camera);
 });
@@ -1001,7 +1091,7 @@ async function calibrate() {
   const blow = await sample(5000);
   calibrating = false;
   breath.floor = quiet[Math.floor(quiet.length * 0.9)];
-  breath.peak = blow[Math.floor(blow.length * 0.8)];
+  breath.peak = blow[Math.floor(blow.length * 0.7)];
   if (breath.peak - breath.floor < 6) {
     $('calMsg').textContent = '沒有聽到明顯的吐氣聲。請把嘴巴靠近頭盔下緣，吐氣稍微用力一點，再試一次。';
     $('btnRetry').hidden = false; return;
@@ -1068,7 +1158,7 @@ if (DEBUG) {
     camera.rotation.x = THREE.MathUtils.clamp(camera.rotation.x - (e.clientY - drag[1]) * 0.004, -1.4, 1.4);
     drag = [e.clientX, e.clientY];
   });
-  window.__osmose = { rig, state, breath, eye, scene, camera, keys };
+  window.__osmose = { rig, state, breath, eye, scene, camera, keys, skip: (sec) => { tStart -= sec; }, codeRings };
 }
 </script>
 </body>
