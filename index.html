@@ -34,7 +34,7 @@
 <body>
 <div id="panel"><div class="card">
   <h1>Osmose 習作</h1>
-  <p class="sub">向 Char Davies《Osmose》（1995）致敬的呼吸式 VR · 約 6 分鐘</p>
+  <p class="sub">向 Char Davies《Osmose》（1995）致敬的呼吸式 VR · 約 5 分鐘</p>
 
   <div id="stepIntro">
     <ul>
@@ -71,10 +71,10 @@ import * as THREE from 'three';
 
 // ---------- 基本設定 ----------
 const DEBUG = new URLSearchParams(location.search).has('debug');
-const TOTAL = 360;          // 總長最多約 6 分鐘
+const TOTAL = 300;          // 總長最多約 5 分鐘
 const TOP_EYE = 70;         // 結尾停留的高度（最上層的程式碼環中）
-const START = new THREE.Vector3(0, 6, 38);
-const EYE_MIN = -88, EYE_MAX = 72, WORLD_R = 50;
+const START = new THREE.Vector3(0, 6, 24);   // 起點離中央的樹近一點
+const EYE_MIN = -74, EYE_MAX = 72, WORLD_R = 50;
 const TAU = Math.PI * 2;
 
 let seed = 1995;
@@ -318,11 +318,11 @@ function grow(tubes, lines, nodes, from, dir, len, rad, depth, o) {
 //  中心：水晶般的枯樹，樹根在半透明地面下鏡像延伸
 // =====================================================================
 const crystal = new Tubes(), crystalLines = [], rootNodes = [];
-grow(crystal, crystalLines, null, V(0, 0, 0), V(0, 1, 0), 9.5, 1.2, 0,
-  { wiggle: 0.3, up: 0.07, spread: 0.9, bias: 0.2, sides: 8, maxDepth: 7, twigs: 4 });
-grow(crystal, crystalLines, rootNodes, V(0, 0, 0), V(0, -1, 0), 8, 0.95, 0,
+grow(crystal, crystalLines, null, V(0, 0, 0), V(0, 1, 0), 12, 2.1, 0,
+  { wiggle: 0.14, up: 0.1, spread: 0.85, bias: 0.22, sides: 10, maxDepth: 7, twigs: 4 });
+grow(crystal, crystalLines, rootNodes, V(0, 0, 0), V(0, -1, 0), 9, 1.7, 0,
   { wiggle: 0.42, up: -0.06, spread: 1.1, bias: -0.24, sides: 8, maxDepth: 7, twigs: 4 });
-crystal.build(crystalMat({ a: [0.12, 0.06, 0.06], b: [1.0, 0.72, 0.6], iri: 0.55, base: 0.04, shimmer: 0.5, far: 170 }));  // 從任何一層都看得到
+crystal.build(crystalMat({ a: [0.12, 0.06, 0.06], b: [1.0, 0.72, 0.6], iri: 0.6, base: 0.07, shimmer: 0.5, far: 170 }));  // 從任何一層都看得到
 lineSet(crystalLines, 0xffd2bc, 0.55, false);   // 樹的「核心」與細絲
 
 // 根的節點：遠看像星系，靠近像微生物
@@ -605,7 +605,7 @@ lineSet(rootLines, 0xffa060, 0.35);
 // =====================================================================
 const plankton = new Pts();
 for (let i = 0; i < 9000; i++) { const [x, y, z] = inBox(); plankton.add(x, y, z, hsl(rand(0.52, 0.62), 0.75, rand(0.3, 0.52)), 0.05); }
-plankton.build(pointMat({ opacity: 0.85, drift: 0.6, wrap: { box: BOX, y0: -76, y1: -29 } }));
+plankton.build(pointMat({ opacity: 0.85, drift: 0.6, wrap: { box: BOX, y0: -62, y1: -29 } }));
 
 // 流紋：短短的白色線段，順著水流緩慢漂移
 {
@@ -627,23 +627,23 @@ plankton.build(pointMat({ opacity: 0.85, drift: 0.6, wrap: { box: BOX, y0: -76, 
         vec3 p = w + (position - aCenter);
         vec4 mv = viewMatrix * vec4(p, 1.0); gl_Position = projectionMatrix * mv;
         float d = -mv.z;
-        vA = smoothstep(-76.0, -70.0, p.y) * (1.0 - smoothstep(-33.0, -29.0, p.y)) * (1.0 - smoothstep(6.0, 18.0, d)) * smoothstep(0.3, 1.5, d); }`,
+        vA = smoothstep(-62.0, -57.0, p.y) * (1.0 - smoothstep(-33.0, -29.0, p.y)) * (1.0 - smoothstep(6.0, 18.0, d)) * smoothstep(0.3, 1.5, d); }`,
     fragmentShader: `varying float vA; void main(){ gl_FragColor = vec4(0.75, 0.88, 1.0, 0.45 * vA); }`,
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
   });
   const l = new THREE.LineSegments(g, mat); l.frustumCulled = false; scene.add(l);
 }
-const JELLY = 130;
-const jellies = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 16, 10, 0, TAU, 0, Math.PI / 2),
+const JELLY = 95;
+const jellies = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 12, 7, 0, TAU, 0, Math.PI / 2),
   crystalMat({ a: [0.02, 0.05, 0.12], b: [0.55, 0.85, 1.0], iri: 0.6, base: 0.04, shimmer: 0.3, far: 30, pulse: true }), JELLY);
 {
   const m = new THREE.Matrix4(), q = new THREE.Quaternion();
   for (let i = 0; i < JELLY; i++) {
-    const near = i < 90;                         // 大部分的水母聚集在中心軸附近
+    const near = i < 55;                         // 大部分的水母聚集在中心軸附近
     const [x, z] = near ? ringPoint(2.5, 14) : ringPoint(14, 45);
     q.setFromEuler(new THREE.Euler(rand(-0.3, 0.3), rand(0, TAU), rand(-0.3, 0.3)));
-    const s = near ? rand(0.5, 2.4) : rand(0.3, 1.3);
-    m.compose(V(x, rand(-68, -34), z), q, V(s, s * 1.2, s));
+    const s = near ? rand(0.5, 1.7) : rand(0.3, 1.2);
+    m.compose(V(x, rand(-56, -35), z), q, V(s, s * 1.2, s));
     jellies.setMatrixAt(i, m);
   }
 }
@@ -684,11 +684,11 @@ function codeMat(tex, seedN) {
       void main(){
         float g = texture2D(map, vUv).a; if (g < 0.03) discard;
         float row = floor(((1.0 - vUv.y) * 1024.0 - 20.0) / 34.0);
-        float sp = 0.12 + 0.4 * h(row), pos = fract(uTime * sp + h(row + 7.0)) * 1.4 - 0.2;
+        float sp = 0.025 + 0.06 * h(row), pos = fract(uTime * sp + h(row + 7.0)) * 1.4 - 0.2;
         float streak = exp(-pow((vUv.x - pos) * 7.0, 2.0)) * step(0.3, h(row + 3.0));
         float trail = smoothstep(pos - 0.35, pos, vUv.x) * step(vUv.x, pos) * 0.35 * step(0.3, h(row + 3.0));
-        float scan = exp(-pow((fract(vUv.y - uTime * 0.07) - 0.5) * 9.0, 2.0));
-        float flick = 0.75 + 0.25 * sin(uTime * 6.0 + row * 1.7 + uSeed);
+        float scan = exp(-pow((fract(vUv.y - uTime * 0.025) - 0.5) * 9.0, 2.0));
+        float flick = 0.8 + 0.2 * sin(uTime * 1.5 + row * 1.7 + uSeed);
         vec3 col = vec3(0.15, 1.0, 0.55) * (0.22 * flick + 0.45 * scan + trail) + vec3(0.85, 1.0, 0.92) * streak * 1.5;
         float a = g * (0.22 + streak + trail + 0.35 * scan) * (1.0 - smoothstep(32.0, 48.0, vD));
         gl_FragColor = vec4(col, min(a, 1.0));
@@ -709,7 +709,7 @@ function codeRing(y, radius, size, count, offset) {
     grp.add(m);
   }
 }
-codeRing(-82, 20, 12, 10, 0);
+codeRing(-72, 20, 12, 10, 0);
 codeRing(69, 18, 8, 8, 5);
 
 const PHRASES = ['呼吸', '浮', '沉', '霧', '慢', '光在水裡慢慢說話', '根在黑暗中聆聽', '身體即介面', '裡 / 外', '心 / 身',
@@ -742,7 +742,7 @@ veil.renderOrder = 9999; camera.add(veil);
 
 // ---------- 依高度變化的天色（偏暖的銅色、玫瑰色；深海轉藍） ----------
 const SKY = [[72, 0x08070e], [58, 0x120d18], [46, 0x2a1f25], [32, 0x251a20], [26, 0x08140f], [18, 0x110909], [2, 0x120706],
-  [-3, 0x0f0704], [-24, 0x0c0503], [-32, 0x041030], [-70, 0x01061a], [-82, 0x000000]].map(([y, c]) => [y, new THREE.Color(c)]);
+  [-3, 0x0f0704], [-24, 0x0c0503], [-32, 0x041030], [-57, 0x01061a], [-67, 0x000000]].map(([y, c]) => [y, new THREE.Color(c)]);
 function skyAt(y, out) {
   if (y >= SKY[0][0]) return out.copy(SKY[0][1]);
   for (let i = 0; i < SKY.length - 1; i++) {
@@ -758,7 +758,7 @@ function skyAt(y, out) {
 // =====================================================================
 let actx = null, bus = null, master = null, analyser = null, freqBuf = null, micOK = false;
 const layers = {};
-const ZONES = { text: [57, 8], cloud: [38, 7], leaf: [23, 4], forest: [5, 9], earth: [-13, 8], ocean: [-50, 18], code: [-80, 8] };
+const ZONES = { text: [57, 8], cloud: [38, 7], leaf: [23, 4], forest: [5, 9], earth: [-13, 8], ocean: [-45, 12], code: [-68, 7] };
 function zoneWeight(name, y) {
   const [c, w] = ZONES[name]; let v = Math.exp(-(((y - c) / w) ** 2));
   if (name === 'code') v = Math.max(v, Math.exp(-(((y - 69) / 5) ** 2)));
@@ -1023,8 +1023,8 @@ addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
 const target = new THREE.Vector3(), lookDir = new THREE.Vector3();
 const SINK_BASE = 0.025;                         // 不吐氣時的下沉速度（公尺／秒），非常輕微
 const SINK_EXHALE = 1.5;                         // 吐氣最大聲時額外的下沉速度
-const RISE_FROM = THREE.MathUtils.degToRad(20);  // 抬頭超過 20 度開始上浮
-const RISE_FULL = THREE.MathUtils.degToRad(55);  // 抬頭 55 度時上浮最快
+const RISE_FROM = THREE.MathUtils.degToRad(8);   // 抬頭超過 8 度開始上浮
+const RISE_FULL = THREE.MathUtils.degToRad(28);  // 抬頭 28 度時上浮最快
 const RISE_MAX = 0.9;                            // 最快上浮速度
 function updateMove(dt, t, ending) {
   const head = camera.position;
@@ -1090,7 +1090,7 @@ const clock = new THREE.Clock();
 let running = false, tStart = 0, finished = false, audioTick = 0, endingStarted = false, fadeStarted = false, endingAt = null;
 const eye = new THREE.Vector3(), sky = new THREE.Color();
 renderer.setAnimationLoop(() => {
-  const dt = Math.min(clock.getDelta(), 0.1), now = clock.elapsedTime;
+  const dt = Math.min(clock.getDelta(), 0.25), now = clock.elapsedTime;
   U.uTime.value = now;
   updateBreath(dt);
   meterBar.style.width = (breath.level * 100).toFixed(1) + '%';
