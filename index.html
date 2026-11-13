@@ -23,7 +23,9 @@
   button:disabled { opacity: .4; cursor: default; }
   #meter { height: 10px; background: #122630; border-radius: 5px; overflow: hidden; margin: 10px 0 18px; }
   #meter > div { height: 100%; width: 0; background: var(--accent); transition: width .05s linear; }
-  #calMsg { min-height: 3.4em; }
+  #calMsg { min-height: 1.6em; color: var(--dim); }
+  .subtitle { min-height: 3.4em; font-size: 18px; margin: 0 0 18px; }
+  button.big { font-size: 26px; padding: 18px 64px; }
   .note { color: var(--dim); font-size: 13px; }
   [hidden] { display: none !important; }
 </style>
@@ -36,15 +38,18 @@
   <h1>Osmose 習作</h1>
   <p class="sub">向 Char Davies《Osmose》（1995）致敬的呼吸式 VR · 約 5 分鐘</p>
 
-  <div id="stepIntro">
-    <ul>
-      <li><b>身體輕輕前傾、後仰或側傾</b>，就會往那個方向漂。</li>
-      <li><b>用嘴巴吐氣</b>會往下沉，吐得越多沉得越快；不吐氣時也會非常緩慢地下沉。</li>
-      <li><b>抬頭往上看</b>，就會慢慢浮起。</li>
-      <li>請站著體驗，周圍留一點空間，不用走動。</li>
-    </ul>
-    <button id="btnMic">開始：允許麥克風</button>
-    <button id="btnNoMic" class="ghost">沒有麥克風，改用扳機代替吐氣</button>
+  <p id="subtitle" class="subtitle"></p>
+
+  <div id="stepWelcome">
+    <button id="btnStart" class="big">開始</button>
+    <p class="note">請開啟頭盔的聲音。按下開始後，會有語音一步一步帶你完成。</p>
+  </div>
+
+  <div id="stepIntro" hidden>
+    <div id="introBtns" hidden>
+      <button id="btnMic">允許麥克風</button>
+      <button id="btnNoMic" class="ghost">不使用麥克風</button>
+    </div>
   </div>
 
   <div id="stepCal" hidden>
@@ -54,14 +59,12 @@
   </div>
 
   <div id="stepReady" hidden>
-    <p id="readyMsg">校準完成。試著吐一口氣，看上面的光條會不會亮起。</p>
     <button id="btnVR" disabled>進入 VR</button>
     <button id="btnPreview" class="ghost" hidden>電腦預覽（除錯用）</button>
     <p id="xrMsg" class="note"></p>
   </div>
 
   <div id="stepEnd" hidden>
-    <p>體驗結束。謝謝你的呼吸。</p>
     <button onclick="location.reload()">再體驗一次</button>
   </div>
 </div></div>
@@ -74,7 +77,7 @@ const DEBUG = new URLSearchParams(location.search).has('debug');
 const TOTAL = 300;          // 總長最多約 5 分鐘
 const TOP_EYE = 70;         // 結尾停留的高度（最上層的程式碼環中）
 const START = new THREE.Vector3(0, 6, 24);   // 起點離中央的樹近一點
-const EYE_MIN = -74, EYE_MAX = 72, WORLD_R = 50;
+const EYE_MIN = -60, EYE_MAX = 72, WORLD_R = 50;
 const TAU = Math.PI * 2;
 
 let seed = 1995;
@@ -342,7 +345,7 @@ const clearingMat = new THREE.ShaderMaterial({
   vertexShader: `varying vec2 vP; void main(){ vP = position.xy; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
   fragmentShader: `uniform float uTime; varying vec2 vP;
     void main(){ float r = length(vP);
-      float n = 0.6 + 0.4 * sin(vP.x*0.9 + sin(vP.y*0.7 + uTime*0.2)*2.0) * sin(vP.y*1.1 - uTime*0.15);
+      float n = 0.75 + 0.25 * sin(r * 1.3 - uTime * 0.4);   // 由中心向外緩慢擴散的柔和漣漪
       float a = (1.0 - smoothstep(4.0, 16.0, r)) * 0.22 * n;
       gl_FragColor = vec4(vec3(1.0, 0.62, 0.48) * (0.6 + 0.4*n), a); }`,
   transparent: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
@@ -605,7 +608,7 @@ lineSet(rootLines, 0xffa060, 0.35);
 // =====================================================================
 const plankton = new Pts();
 for (let i = 0; i < 9000; i++) { const [x, y, z] = inBox(); plankton.add(x, y, z, hsl(rand(0.52, 0.62), 0.75, rand(0.3, 0.52)), 0.05); }
-plankton.build(pointMat({ opacity: 0.85, drift: 0.6, wrap: { box: BOX, y0: -62, y1: -29 } }));
+plankton.build(pointMat({ opacity: 0.85, drift: 0.6, wrap: { box: BOX, y0: -50, y1: -29 } }));
 
 // 流紋：短短的白色線段，順著水流緩慢漂移
 {
@@ -627,23 +630,23 @@ plankton.build(pointMat({ opacity: 0.85, drift: 0.6, wrap: { box: BOX, y0: -62, 
         vec3 p = w + (position - aCenter);
         vec4 mv = viewMatrix * vec4(p, 1.0); gl_Position = projectionMatrix * mv;
         float d = -mv.z;
-        vA = smoothstep(-62.0, -57.0, p.y) * (1.0 - smoothstep(-33.0, -29.0, p.y)) * (1.0 - smoothstep(6.0, 18.0, d)) * smoothstep(0.3, 1.5, d); }`,
+        vA = smoothstep(-50.0, -46.0, p.y) * (1.0 - smoothstep(-33.0, -29.0, p.y)) * (1.0 - smoothstep(6.0, 18.0, d)) * smoothstep(0.3, 1.5, d); }`,
     fragmentShader: `varying float vA; void main(){ gl_FragColor = vec4(0.75, 0.88, 1.0, 0.45 * vA); }`,
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
   });
   const l = new THREE.LineSegments(g, mat); l.frustumCulled = false; scene.add(l);
 }
-const JELLY = 95;
+const JELLY = 75;
 const jellies = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 12, 7, 0, TAU, 0, Math.PI / 2),
   crystalMat({ a: [0.02, 0.05, 0.12], b: [0.55, 0.85, 1.0], iri: 0.6, base: 0.04, shimmer: 0.3, far: 30, pulse: true }), JELLY);
 {
   const m = new THREE.Matrix4(), q = new THREE.Quaternion();
   for (let i = 0; i < JELLY; i++) {
-    const near = i < 55;                         // 大部分的水母聚集在中心軸附近
+    const near = i < 45;                         // 大部分的水母聚集在中心軸附近
     const [x, z] = near ? ringPoint(2.5, 14) : ringPoint(14, 45);
     q.setFromEuler(new THREE.Euler(rand(-0.3, 0.3), rand(0, TAU), rand(-0.3, 0.3)));
     const s = near ? rand(0.5, 1.7) : rand(0.3, 1.2);
-    m.compose(V(x, rand(-56, -35), z), q, V(s, s * 1.2, s));
+    m.compose(V(x, rand(-46, -35), z), q, V(s, s * 1.2, s));
     jellies.setMatrixAt(i, m);
   }
 }
@@ -709,7 +712,7 @@ function codeRing(y, radius, size, count, offset) {
     grp.add(m);
   }
 }
-codeRing(-72, 20, 12, 10, 0);
+codeRing(-58, 20, 12, 10, 0);
 codeRing(69, 18, 8, 8, 5);
 
 const PHRASES = ['呼吸', '浮', '沉', '霧', '慢', '光在水裡慢慢說話', '根在黑暗中聆聽', '身體即介面', '裡 / 外', '心 / 身',
@@ -728,21 +731,38 @@ PHRASES.forEach((p) => {
 const hintTex = (t) => textTexture(t, { w: 1024, h: 256, font: '44px "PingFang TC", "Noto Sans TC", sans-serif', color: 'rgba(230,240,245,0.95)', lh: 64, center: true });
 const HINTS = [
   hintTex(['身體輕輕前傾、後仰或側傾', '就會往那個方向漂']),
-  hintTex(['用嘴巴吐氣會往下沉，吐得越多沉得越快', '抬頭往上看，就會慢慢浮起']),
-  hintTex(['按住扳機會往下沉，按得越深沉得越快', '抬頭往上看，就會慢慢浮起']),
+  hintTex(['用嘴巴吐氣或往下看，就會往下沉', '稍微抬頭，就會往上浮']),
+  hintTex(['往下看，就會往下沉', '稍微抬頭，就會往上浮']),
   hintTex(['旅程即將結束', '你會被慢慢帶回最上層，回顧經過的世界']),
 ];
 const hintMat = new THREE.SpriteMaterial({ map: HINTS[0], transparent: true, opacity: 0, depthTest: false, depthWrite: false, fog: false });
 const hint = new THREE.Sprite(hintMat);
-hint.scale.set(1.6, 0.4, 1); hint.position.set(0, -0.15, -2); hint.renderOrder = 1000;
+hint.visible = false; hint.scale.set(1.6, 0.4, 1); hint.position.set(0, -0.15, -2); hint.renderOrder = 1000;
 camera.add(hint);
+// 診斷用：網址加上 ?fps，眼前右下角會顯示每秒畫面數與目前高度
+const SHOW_FPS = new URLSearchParams(location.search).has('fps');
+const fpsCanvas = document.createElement('canvas'); fpsCanvas.width = 256; fpsCanvas.height = 64;
+const fpsTex = new THREE.CanvasTexture(fpsCanvas);
+const fpsSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: fpsTex, transparent: true, depthTest: false, depthWrite: false, fog: false }));
+fpsSprite.scale.set(0.4, 0.1, 1); fpsSprite.position.set(0.3, -0.35, -1.5); fpsSprite.renderOrder = 1001; fpsSprite.visible = SHOW_FPS;
+camera.add(fpsSprite);
+let fpsFrames = 0, fpsTime = 0;
+function updateFps(dt, y) {
+  fpsFrames++; fpsTime += dt;
+  if (fpsTime < 0.5) return;
+  const g = fpsCanvas.getContext('2d'); g.clearRect(0, 0, 256, 64);
+  g.fillStyle = 'rgba(0,0,0,0.5)'; g.fillRect(0, 0, 256, 64);
+  g.fillStyle = '#9fffc8'; g.font = '28px Menlo, monospace';
+  g.fillText(`${Math.round(fpsFrames / fpsTime)} fps  y ${Math.round(y)}`, 12, 42);
+  fpsTex.needsUpdate = true; fpsFrames = 0; fpsTime = 0;
+}
 const veilMat = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide, transparent: true, opacity: 1, depthTest: false, depthWrite: false, fog: false });
 const veil = new THREE.Mesh(new THREE.SphereGeometry(0.3, 16, 12), veilMat);
 veil.renderOrder = 9999; camera.add(veil);
 
 // ---------- 依高度變化的天色（偏暖的銅色、玫瑰色；深海轉藍） ----------
 const SKY = [[72, 0x08070e], [58, 0x120d18], [46, 0x2a1f25], [32, 0x251a20], [26, 0x08140f], [18, 0x110909], [2, 0x120706],
-  [-3, 0x0f0704], [-24, 0x0c0503], [-32, 0x041030], [-57, 0x01061a], [-67, 0x000000]].map(([y, c]) => [y, new THREE.Color(c)]);
+  [-3, 0x0f0704], [-24, 0x0c0503], [-32, 0x041030], [-46, 0x01061a], [-54, 0x000000]].map(([y, c]) => [y, new THREE.Color(c)]);
 function skyAt(y, out) {
   if (y >= SKY[0][0]) return out.copy(SKY[0][1]);
   for (let i = 0; i < SKY.length - 1; i++) {
@@ -758,7 +778,7 @@ function skyAt(y, out) {
 // =====================================================================
 let actx = null, bus = null, master = null, analyser = null, freqBuf = null, micOK = false;
 const layers = {};
-const ZONES = { text: [57, 8], cloud: [38, 7], leaf: [23, 4], forest: [5, 9], earth: [-13, 8], ocean: [-45, 12], code: [-68, 7] };
+const ZONES = { text: [57, 8], cloud: [38, 7], leaf: [23, 4], forest: [5, 9], earth: [-13, 8], ocean: [-40, 8], code: [-57, 6] };
 function zoneWeight(name, y) {
   const [c, w] = ZONES[name]; let v = Math.exp(-(((y - c) / w) ** 2));
   if (name === 'code') v = Math.max(v, Math.exp(-(((y - 69) / 5) ** 2)));
@@ -862,6 +882,48 @@ function initAudio() {
     sources.swarms.push(p);
   });
   sources.tree = panner(0, 6, 0, 6, 1.0);  // 水晶樹的鈴聲
+  loadVoices();
+}
+// ---------- 人聲導覽（自己錄的 14 段語音；畫面上同步顯示字幕） ----------
+const SCRIPT = {
+  1: '歡迎來到 Osmose 習作。這是向加拿大藝術家 Char Davies 的作品《Osmose》致敬的虛擬實境體驗，大約五分鐘。',
+  2: '在裡面，你不需要按任何按鈕。身體輕輕前傾，就會往那個方向漂；往下看，或用嘴巴吐氣，會往下沉；稍微抬頭，就會往上浮。請站著體驗，周圍留一點空間，不用走動。',
+  3: '接下來，請按下畫面上的按鈕，並允許使用麥克風。',
+  4: '我們先花十秒鐘，認識你的呼吸。',
+  5: '請保持安靜，用鼻子自然地呼吸。',
+  6: '準備用嘴巴長長地吐一口氣，像在吹涼一碗熱湯。……現在開始。',
+  7: '好了。請按下「進入 VR」，然後自然地看向前方。',
+  8: '剛才沒有聽清楚你的吐氣聲。請按下「重新校準」，這次吐氣時，嘴巴微微朝下，吐得再長、再用力一點。',
+  9: '不使用麥克風也沒關係，往下看一樣可以下沉。請按下「進入 VR」。',
+  10: '身體輕輕前傾，就會往那個方向漂。',
+  11: '往下看，或用嘴巴吐氣，就會往下沉。稍微抬頭，就會往上浮。',
+  12: '往下看，就會往下沉。稍微抬頭，就會往上浮。',
+  13: '旅程即將結束。你會被慢慢帶回最上層，回顧經過的世界。',
+  14: '體驗結束了，謝謝你的呼吸。你可以慢慢摘下頭盔。',
+};
+const VOICES = {};
+let voiceUntil = 0, voiceSrc = null, voiceOut = null, voicesReady = null;
+function loadVoices() {
+  voiceOut = actx.createGain(); voiceOut.gain.value = 1.0; voiceOut.connect(actx.destination);  // 不經過總音量，進 VR 前也聽得到
+  voicesReady = Promise.all(Object.keys(SCRIPT).map(async (k) => {
+    try { const r = await fetch(`voice-${String(k).padStart(2, '0')}.m4a`); VOICES[k] = await actx.decodeAudioData(await r.arrayBuffer()); }
+    catch (e) { /* 載不到就只顯示字幕 */ }
+  }));
+  return voicesReady;
+}
+function stopVoice() { if (voiceSrc) { try { voiceSrc.onended = null; voiceSrc.stop(); } catch (e) {} voiceSrc = null; } }
+// 播放第 k 段語音並顯示字幕；回傳一個在播完時完成的 Promise
+function speak(k) {
+  const sub = document.getElementById('subtitle'); if (sub) sub.textContent = SCRIPT[k] || '';
+  const b = VOICES[k];
+  if (!b || !actx) return new Promise(r => setTimeout(r, (SCRIPT[k] || '').length * 180));
+  stopVoice();
+  const src = actx.createBufferSource(); src.buffer = b;
+  src.connect(voiceOut);
+  if (running) { const send = actx.createGain(); send.gain.value = 0.3; src.connect(send).connect(bus); }  // VR 裡加一點空間回聲
+  voiceSrc = src; src.start();
+  voiceUntil = actx.currentTime + b.duration + 0.5;   // 播放期間暫停吐氣偵測，避免人聲被當成吐氣
+  return new Promise(r => { src.onended = () => { if (voiceSrc === src) voiceSrc = null; r(); }; });
 }
 function blip(f0, f1, dur, vol, dest = bus) {
   const o = actx.createOscillator(), g = actx.createGain(), t = actx.currentTime;
@@ -1001,31 +1063,32 @@ async function initMic() {
 let calibrating = false;
 function updateBreath(dt) {
   let raw = 0;
-  if (micOK) {
+  if (micOK && !(actx && actx.currentTime < voiceUntil && !calibrating)) {
     const db = micDb();
     raw = calibrating ? Math.min(1, Math.max(0, (db + 100) / 60))
       : Math.pow(Math.min(1, Math.max(0, (db - breath.floor - 2) / Math.max(3, (breath.peak - breath.floor) * 0.6))), 0.7);
   }
   if (DEBUG && keys[' ']) raw = 1;
-  const session = renderer.xr.getSession();
-  if (session) for (const src of session.inputSources) {
-    const b = src.gamepad && src.gamepad.buttons[0]; if (b && b.value > 0.1) raw = Math.max(raw, b.value);
-  }
   const tau = raw > breath.level ? 0.08 : 0.25;
   breath.level += (raw - breath.level) * (1 - Math.exp(-dt / tau));
 }
 
 // ---------- 移動：傾身＝水平漂移；吐氣＝肺變空而下沉 ----------
-const state = { ref: new THREE.Vector3(), vel: new THREE.Vector3(), lungs: 0.62 };
+const state = { ref: new THREE.Vector3(), vel: new THREE.Vector3(), lungs: 0.62, pitch0: 0 };
 const keys = {};
 addEventListener('keydown', (e) => { keys[e.key.toLowerCase()] = true; if (e.key === ' ') e.preventDefault(); });
 addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
 const target = new THREE.Vector3(), lookDir = new THREE.Vector3();
 const SINK_BASE = 0.025;                         // 不吐氣時的下沉速度（公尺／秒），非常輕微
 const SINK_EXHALE = 1.5;                         // 吐氣最大聲時額外的下沉速度
-const RISE_FROM = THREE.MathUtils.degToRad(8);   // 抬頭超過 8 度開始上浮
-const RISE_FULL = THREE.MathUtils.degToRad(28);  // 抬頭 28 度時上浮最快
-const RISE_MAX = 0.9;                            // 最快上浮速度
+// 頭的角度以「開始時自然平視的角度」為準，所以每個人戴頭盔的習慣不同也沒關係
+const RISE_FROM = THREE.MathUtils.degToRad(3);   // 比平視稍微抬頭 3 度就開始上浮
+const RISE_FULL = THREE.MathUtils.degToRad(15);  // 抬頭 15 度時上浮最快
+const RISE_MAX = 1.5;                            // 最快上浮速度
+const LOOK_SINK_FROM = THREE.MathUtils.degToRad(10);  // 往下看超過 10 度開始下沉
+const LOOK_SINK_FULL = THREE.MathUtils.degToRad(35);  // 往下看 35 度時下沉最快
+const LOOK_SINK_MAX = 1.3;                            // 往下看的最快下沉速度
+const OCEAN_BOOST = 1.2;                              // 在海洋層時，上下移動再加快（最多 2.2 倍）
 function updateMove(dt, t, ending) {
   const head = camera.position;
   if (renderer.xr.isPresenting) {
@@ -1039,15 +1102,18 @@ function updateMove(dt, t, ending) {
       const f = (keys.w ? 1 : 0) - (keys.s ? 1 : 0), r = (keys.d ? 1 : 0) - (keys.a ? 1 : 0), y = camera.rotation.y;
       ox = (-Math.sin(y) * f + Math.cos(y) * r) * 0.2; oz = (-Math.cos(y) * f - Math.sin(y) * r) * 0.2;
     }
-    const m = Math.hypot(ox, oz), s = smooth(0.05, 0.22, m) * 1.4;
+    const m = Math.hypot(ox, oz), s = smooth(0.04, 0.14, m) * 1.4;   // 前傾 4 公分開始、14 公分最快
     if (m > 1e-4) { target.x = ox / m * s; target.z = oz / m * s; }
-    // 上下：平常會非常緩慢地下沉；吐氣越大聲沉得越快；抬頭往上看就會浮起
+    // 上下：平常非常緩慢地下沉；吐氣或往下看會下沉；稍微抬頭就會浮起
     const ex = breath.level > 0.04 ? breath.level : 0;
-    const sink = SINK_BASE + SINK_EXHALE * ex;
     camera.getWorldDirection(lookDir);
-    const pitch = Math.asin(THREE.MathUtils.clamp(lookDir.y, -1, 1));
+    const pitchAbs = Math.asin(THREE.MathUtils.clamp(lookDir.y, -1, 1));
+    if (renderer.xr.isPresenting && t < 2) state.pitch0 = THREE.MathUtils.clamp(pitchAbs, -0.26, 0.17);
+    const pitch = pitchAbs - state.pitch0;
     const rise = smooth(RISE_FROM, RISE_FULL, pitch) * RISE_MAX;
-    target.y = rise - sink;
+    const sink = SINK_BASE + SINK_EXHALE * ex + smooth(LOOK_SINK_FROM, LOOK_SINK_FULL, -pitch) * LOOK_SINK_MAX;
+    const boost = 1 + OCEAN_BOOST * zoneWeight('ocean', rig.position.y + head.y);
+    target.y = (rise - sink) * boost;
   } else { ascend(dt, t); return; }
   // 水平慢慢加速；垂直反應快一點，吐氣時能立刻感覺到下沉
   const kh = 1 - Math.exp(-dt / 1.4), kv = 1 - Math.exp(-dt / 0.7);
@@ -1087,6 +1153,8 @@ function shouldEnd(t) {
 
 // ---------- 主迴圈 ----------
 const clock = new THREE.Clock();
+let gridFade = 1;
+const spoken = { lean: false, move: false, ending: false };
 let running = false, tStart = 0, finished = false, audioTick = 0, endingStarted = false, fadeStarted = false, endingAt = null;
 const eye = new THREE.Vector3(), sky = new THREE.Color();
 renderer.setAnimationLoop(() => {
@@ -1104,16 +1172,11 @@ renderer.setAnimationLoop(() => {
     // 淡入（0–4 秒）；抵達頂端後停留片刻再淡出
     const fadeAt = arrived !== null ? Math.max(arrived + 3, endingAt + 12) : null;   // 讓結尾的字至少顯示完再淡出
     veilMat.opacity = ending ? (fadeAt !== null ? smooth(fadeAt, fadeAt + 7, t) : 0) : 1 - smooth(0, 4, t);
-    // 提示文字
-    const second = micOK ? HINTS[1] : HINTS[2];
-    if (ending) {
-      hintMat.map = HINTS[3];
-      hintMat.opacity = smooth(endingAt + 1, endingAt + 3, t) * (1 - smooth(endingAt + 9, endingAt + 11, t));
-    } else {
-      hintMat.map = t < 15 ? HINTS[0] : second;
-      hintMat.opacity = t < 15 ? smooth(4, 7, t) * (1 - smooth(13, 15, t)) : smooth(15, 17, t) * (1 - smooth(27, 30, t));
-    }
     if (ending && !endingStarted && actx) { endingStarted = true; endingCue(); }
+    // VR 裡只用人聲，不顯示文字
+    if (!spoken.lean && t > 4.5 && !ending) { spoken.lean = true; speak(10); }
+    if (!spoken.move && t > 15.5 && !ending) { spoken.move = true; speak(micOK ? 11 : 12); }
+    if (!spoken.ending && ending && t > endingAt + 1) { spoken.ending = true; speak(13); }
     if (fadeAt !== null && t > fadeAt && !fadeStarted && actx) { fadeStarted = true; master.gain.setTargetAtTime(0, actx.currentTime, 2.5); }
     if (fadeAt !== null && t > fadeAt + 8 && !finished) finish();
   } else if (!DEBUG) {
@@ -1123,8 +1186,13 @@ renderer.setAnimationLoop(() => {
 
   // 環境：天色、霧、網格、聲音
   camera.getWorldPosition(eye);
+  if (SHOW_FPS) updateFps(dt, eye.y);
   skyAt(eye.y, sky); scene.background.copy(sky); scene.fog.color.copy(sky);
-  gridMat.opacity = 0.45 * (1 - smooth(4, 14, eye.distanceTo(gc)));
+  // 起點的座標網格：只在一開始出現，前 20 秒內或離開幾公尺後就溶解，之後不再出現
+  const tRun = running ? clock.elapsedTime - tStart : 0;
+  gridFade = Math.min(gridFade, (1 - smooth(6, 20, tRun)) * (1 - smooth(2, 8, eye.distanceTo(gc))));
+  if (!running) gridFade = 1;
+  gridMat.opacity = 0.3 * gridFade;
   for (const g of codeRings) { g.position.x = eye.x; g.position.z = eye.z; }  // 程式碼環永遠以體驗者為中心
   if (actx && running) updateSound(dt, now);
   renderer.render(scene, camera);
@@ -1133,44 +1201,53 @@ renderer.setAnimationLoop(() => {
 // ---------- 介面流程 ----------
 const $ = (id) => document.getElementById(id);
 const meterBar = document.querySelector('#meter > div');
-const show = (id) => ['stepIntro', 'stepCal', 'stepReady', 'stepEnd'].forEach(s => $(s).hidden = s !== id);
+const show = (id) => ['stepWelcome', 'stepIntro', 'stepCal', 'stepReady', 'stepEnd'].forEach(s => $(s).hidden = s !== id);
 function sample(ms) {
   return new Promise(res => { const arr = [], t0 = performance.now();
     const id = setInterval(() => { arr.push(micDb()); if (performance.now() - t0 > ms) { clearInterval(id); res(arr.sort((a, b) => a - b)); } }, 30); });
 }
 const wait = (ms) => new Promise(r => setTimeout(r, ms));
+// 校準：每一段量測都在語音播完之後才開始，人聲不會被算進去
 async function calibrate() {
   show('stepCal'); $('btnRetry').hidden = true; calibrating = true;
-  $('calMsg').textContent = '準備校準⋯ 請先戴好頭盔，嘴巴自然靠近頭盔下緣。';
-  await wait(2500);
-  $('calMsg').textContent = '① 請保持安靜，用鼻子自然呼吸（4 秒）';
+  $('calMsg').textContent = '';
+  await speak(4);
+  await speak(5);
+  await wait(500);
+  $('calMsg').textContent = '安靜呼吸中⋯';
   const quiet = await sample(4000);
-  $('calMsg').textContent = '② 現在用嘴巴緩慢、長長地吐一口氣，像在吹涼一碗熱湯（5 秒）';
-  const blow = await sample(5000);
+  $('calMsg').textContent = '';
+  await speak(6);
+  await wait(300);
+  $('calMsg').textContent = '吐氣中⋯';
+  const blow = await sample(6000);
+  $('calMsg').textContent = '';
   calibrating = false;
   breath.floor = quiet[Math.floor(quiet.length * 0.9)];
   breath.peak = blow[Math.floor(blow.length * 0.7)];
-  if (breath.peak - breath.floor < 6) {
-    $('calMsg').textContent = '沒有聽到明顯的吐氣聲。請把嘴巴靠近頭盔下緣，吐氣稍微用力一點，再試一次。';
-    $('btnRetry').hidden = false; return;
-  }
-  $('stepCal').hidden = true; $('stepReady').hidden = false;
-  $('stepReady').prepend($('meter'));
+  if (breath.peak - breath.floor < 6) { $('btnRetry').hidden = false; speak(8); return; }
+  show('stepReady'); $('stepReady').prepend($('meter'));
+  speak(7);
 }
+$('btnStart').onclick = async () => {
+  if (!actx) initAudio();
+  await actx.resume();
+  show('stepIntro');
+  $('subtitle').textContent = '載入中⋯';
+  await voicesReady;
+  await speak(1);
+  await speak(2);
+  $('introBtns').hidden = false;
+  speak(3);
+};
 $('btnMic').onclick = async () => {
-  if (!actx) initAudio();
-  await actx.resume();
-  try { await initMic(); await calibrate(); }
-  catch (e) {
-    show('stepReady'); $('readyMsg').textContent = '無法使用麥克風（' + e.name + '）。進入 VR 後可以按住扳機代替吐氣。';
-  }
+  stopVoice();
+  try { await initMic(); }
+  catch (e) { micOK = false; show('stepReady'); speak(9); return; }
+  await calibrate();
 };
-$('btnRetry').onclick = calibrate;
-$('btnNoMic').onclick = async () => {
-  if (!actx) initAudio();
-  await actx.resume();
-  show('stepReady'); $('readyMsg').textContent = '進入 VR 後，按住手把扳機代替吐氣；抬頭往上看就會浮起。';
-};
+$('btnRetry').onclick = () => { stopVoice(); calibrate(); };
+$('btnNoMic').onclick = () => { stopVoice(); micOK = false; show('stepReady'); speak(9); };
 
 if (navigator.xr) navigator.xr.isSessionSupported('immersive-vr').then(ok => {
   $('btnVR').disabled = !ok;
@@ -1179,7 +1256,7 @@ if (navigator.xr) navigator.xr.isSessionSupported('immersive-vr').then(ok => {
 else $('xrMsg').textContent = '這個瀏覽器不支援 WebXR。請在 Quest 頭盔的瀏覽器裡開啟（需要 https）。';
 
 function begin() {
-  $('panel').hidden = true;
+  $('panel').hidden = true; stopVoice();
   rig.position.copy(START); state.vel.set(0, 0, 0); state.lungs = 0.62;
   camera.rotation.set(0, 0, 0);
   running = true; tStart = clock.elapsedTime; updatePixelScale();
@@ -1194,8 +1271,10 @@ function showEnd() {
   if (choirTimer) { clearInterval(choirTimer); choirTimer = null; }
   if (actx) master.gain.setTargetAtTime(0, actx.currentTime, 0.3);
   $('panel').hidden = false; show('stepEnd');
+  if (actx) speak(14);
 }
 $('btnVR').onclick = async () => {
+  stopVoice(); $('subtitle').textContent = '';
   try {
     const session = await navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor'] });
     await renderer.xr.setSession(session);
@@ -1217,7 +1296,7 @@ if (DEBUG) {
     camera.rotation.x = THREE.MathUtils.clamp(camera.rotation.x - (e.clientY - drag[1]) * 0.004, -1.4, 1.4);
     drag = [e.clientX, e.clientY];
   });
-  window.__osmose = { rig, state, breath, eye, scene, camera, keys, skip: (sec) => { tStart -= sec; }, codeRings };
+  window.__osmose = { rig, state, breath, eye, scene, camera, keys, skip: (sec) => { tStart -= sec; }, codeRings, VOICES, voiceState: () => ({ until: voiceUntil, now: actx && actx.currentTime, spoken }) };
 }
 </script>
 </body>
