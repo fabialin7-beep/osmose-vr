@@ -46,6 +46,7 @@
   </div>
 
   <div id="stepIntro" hidden>
+    <p id="pageNo" class="note"></p>
     <button id="btnSkip" class="ghost">跳過說明</button>
     <div id="introBtns" hidden>
       <button id="btnMic">允許麥克風</button>
@@ -1237,25 +1238,29 @@ async function calibrate() {
   show('stepReady'); $('stepReady').prepend($('meter'));
   speak(7);
 }
-let introSkipped = false;
-function introDone() {            // 說明結束（播完或跳過）：顯示麥克風按鈕，並播第 3 段
-  $('btnSkip').hidden = true; $('introBtns').hidden = false;
-  speak(3);
+// 說明共三頁（語音 1、2、3）。每頁播完自動進下一頁；「跳過說明」會停止這一頁的語音，直接進下一頁
+let introPage = 0, introGen = 0;
+function showIntroPage(n) {
+  introPage = n; const gen = ++introGen;
+  $('pageNo').textContent = `說明 ${n} / 3`;
+  $('btnSkip').hidden = false;
+  $('introBtns').hidden = n < 3;            // 第 3 頁說「請按下按鈕」時，按鈕同時出現
+  speak(n).then(() => { if (gen === introGen) nextIntro(); });
+}
+function nextIntro() {
+  if (introPage < 3) showIntroPage(introPage + 1);
+  else { $('btnSkip').hidden = true; $('pageNo').textContent = ''; }
 }
 $('btnStart').onclick = async () => {
   if (!actx) initAudio();
   await actx.resume();
   show('stepIntro');
+  $('btnSkip').hidden = true;
   $('subtitle').textContent = '載入中⋯';
   await voicesReady;
-  if (introSkipped) return;
-  await speak(1);
-  if (introSkipped) return;
-  await speak(2);
-  if (introSkipped) return;
-  introDone();
+  showIntroPage(1);
 };
-$('btnSkip').onclick = () => { introSkipped = true; stopVoice(); introDone(); };
+$('btnSkip').onclick = () => { introGen++; stopVoice(); nextIntro(); };
 $('btnMic').onclick = async () => {
   stopVoice();
   try { await initMic(); }
