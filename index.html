@@ -46,6 +46,7 @@
   </div>
 
   <div id="stepIntro" hidden>
+    <button id="btnSkip" class="ghost">跳過說明</button>
     <div id="introBtns" hidden>
       <button id="btnMic">允許麥克風</button>
       <button id="btnNoMic" class="ghost">不使用麥克風</button>
@@ -738,14 +739,14 @@ const HINTS = [
 const hintMat = new THREE.SpriteMaterial({ map: HINTS[0], transparent: true, opacity: 0, depthTest: false, depthWrite: false, fog: false });
 const hint = new THREE.Sprite(hintMat);
 hint.visible = false; hint.scale.set(1.6, 0.4, 1); hint.position.set(0, -0.15, -2); hint.renderOrder = 1000;
-camera.add(hint);
+// （提示文字已改成人聲，不再掛在眼前）
 // 診斷用：網址加上 ?fps，眼前右下角會顯示每秒畫面數與目前高度
 const SHOW_FPS = new URLSearchParams(location.search).has('fps');
 const fpsCanvas = document.createElement('canvas'); fpsCanvas.width = 256; fpsCanvas.height = 64;
 const fpsTex = new THREE.CanvasTexture(fpsCanvas);
 const fpsSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: fpsTex, transparent: true, depthTest: false, depthWrite: false, fog: false }));
 fpsSprite.scale.set(0.4, 0.1, 1); fpsSprite.position.set(0.3, -0.35, -1.5); fpsSprite.renderOrder = 1001; fpsSprite.visible = SHOW_FPS;
-camera.add(fpsSprite);
+if (SHOW_FPS) camera.add(fpsSprite);
 let fpsFrames = 0, fpsTime = 0;
 function updateFps(dt, y) {
   fpsFrames++; fpsTime += dt;
@@ -1154,7 +1155,8 @@ function shouldEnd(t) {
 // ---------- 主迴圈 ----------
 const clock = new THREE.Clock();
 let gridFade = 1;
-const spoken = { lean: false, move: false, ending: false };
+const spoken = { lean: false, move: false, ending: false, final: false };
+let endAt = null;
 let running = false, tStart = 0, finished = false, audioTick = 0, endingStarted = false, fadeStarted = false, endingAt = null;
 const eye = new THREE.Vector3(), sky = new THREE.Color();
 renderer.setAnimationLoop(() => {
@@ -1170,20 +1172,26 @@ renderer.setAnimationLoop(() => {
     const ending = endingAt !== null, arrived = asc && asc.arrived !== null ? asc.arrived : null;
     updateMove(dt, t, ending);
     // 淡入（0–4 秒）；抵達頂端後停留片刻再淡出
-    const fadeAt = arrived !== null ? Math.max(arrived + 3, endingAt + 12) : null;   // 讓結尾的字至少顯示完再淡出
-    veilMat.opacity = ending ? (fadeAt !== null ? smooth(fadeAt, fadeAt + 7, t) : 0) : 1 - smooth(0, 4, t);
+    const fadeAt = arrived !== null ? Math.max(arrived + 1, endingAt + 10.5) : null;   // 結尾語音（13）說完、抵達頂端後就開始淡出
+    veilMat.opacity = ending ? (fadeAt !== null ? smooth(fadeAt, fadeAt + 3, t) : 0) : 1 - smooth(0, 4, t);
     if (ending && !endingStarted && actx) { endingStarted = true; endingCue(); }
     // VR 裡只用人聲，不顯示文字
     if (!spoken.lean && t > 4.5 && !ending) { spoken.lean = true; speak(10); }
     if (!spoken.move && t > 15.5 && !ending) { spoken.move = true; speak(micOK ? 11 : 12); }
     if (!spoken.ending && ending && t > endingAt + 1) { spoken.ending = true; speak(13); }
-    if (fadeAt !== null && t > fadeAt && !fadeStarted && actx) { fadeStarted = true; master.gain.setTargetAtTime(0, actx.currentTime, 2.5); }
-    if (fadeAt !== null && t > fadeAt + 8 && !finished) finish();
+    if (fadeAt !== null && t > fadeAt && !fadeStarted) {
+      fadeStarted = true;
+      if (actx) master.gain.setTargetAtTime(0, actx.currentTime, 1.2);
+      endAt = t + (VOICES[14] ? VOICES[14].duration : 6) + 0.6;          // 一邊淡出一邊說最後一句，說完就結束
+      spoken.final = true; speak(14);
+    }
+    if (endAt !== null && t > endAt && !finished) finish();
   } else if (!DEBUG) {
     camera.rotation.y = now * 0.03; // 開始前的背景緩慢旋轉
     veilMat.opacity = 0;
   } else veilMat.opacity = 0;
 
+  veil.visible = veilMat.opacity > 0.002;   // 平常完全不畫，避免眼前殘留任何東西
   // 環境：天色、霧、網格、聲音
   camera.getWorldPosition(eye);
   if (SHOW_FPS) updateFps(dt, eye.y);
@@ -1229,17 +1237,25 @@ async function calibrate() {
   show('stepReady'); $('stepReady').prepend($('meter'));
   speak(7);
 }
+let introSkipped = false;
+function introDone() {            // 說明結束（播完或跳過）：顯示麥克風按鈕，並播第 3 段
+  $('btnSkip').hidden = true; $('introBtns').hidden = false;
+  speak(3);
+}
 $('btnStart').onclick = async () => {
   if (!actx) initAudio();
   await actx.resume();
   show('stepIntro');
   $('subtitle').textContent = '載入中⋯';
   await voicesReady;
+  if (introSkipped) return;
   await speak(1);
+  if (introSkipped) return;
   await speak(2);
-  $('introBtns').hidden = false;
-  speak(3);
+  if (introSkipped) return;
+  introDone();
 };
+$('btnSkip').onclick = () => { introSkipped = true; stopVoice(); introDone(); };
 $('btnMic').onclick = async () => {
   stopVoice();
   try { await initMic(); }
@@ -1271,7 +1287,7 @@ function showEnd() {
   if (choirTimer) { clearInterval(choirTimer); choirTimer = null; }
   if (actx) master.gain.setTargetAtTime(0, actx.currentTime, 0.3);
   $('panel').hidden = false; show('stepEnd');
-  if (actx) speak(14);
+  if (actx && !spoken.final) speak(14);
 }
 $('btnVR').onclick = async () => {
   stopVoice(); $('subtitle').textContent = '';
