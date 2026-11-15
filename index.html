@@ -570,6 +570,10 @@ const soil = new Pts(), minerals = new Pts();
 for (let i = 0; i < 6000; i++) { const [x, y, z] = inBox(); soil.add(x, y, z, hsl(rand(0.05, 0.09), 0.5, rand(0.12, 0.24)), 0.07); }
 for (let i = 0; i < 900; i++) { const [x, y, z] = inBox(); minerals.add(x, y, z, hsl(rand(0.08, 0.13), 0.9, 0.62), 0.04); }
 soil.build(pointMat({ opacity: 0.75, wrap: { box: BOX, y0: -28, y1: -0.5 } }));
+// 最底層的「資料塵」：固定在世界中的綠色光點，傾身移動時能看見自己在移動
+const dataDust = new Pts();
+for (let i = 0; i < 7000; i++) { const [x, y, z] = inBox(); dataDust.add(x, y, z, hsl(rand(0.36, 0.45), 0.9, rand(0.4, 0.65)), 0.06); }
+dataDust.build(pointMat({ opacity: 0.9, drift: 0.08, wrap: { box: BOX, y0: -64, y1: -50 } }));
 minerals.build(pointMat({ opacity: 1, drift: 0.05, wrap: { box: BOX, y0: -28, y1: -0.5 } }));
 
 // 半透明的岩石
@@ -779,6 +783,7 @@ function skyAt(y, out) {
 //  聲音：每一層有自己的聲音；森林裡有立體定位的蟲鳴、蛙聲、蟲群
 //  （麥克風只分析 1–3.5 kHz 的氣流聲；蟲鳴在 4 kHz 以上，不會被誤認成吐氣）
 // =====================================================================
+let duck = null;
 let actx = null, bus = null, master = null, analyser = null, freqBuf = null, micOK = false;
 const layers = {};
 const ZONES = { text: [57, 8], cloud: [38, 7], leaf: [23, 4], forest: [5, 9], earth: [-13, 8], ocean: [-40, 8], code: [-57, 6] };
@@ -807,7 +812,8 @@ function initAudio() {
   NOISE = noiseBuffer();
   master = actx.createGain(); master.gain.value = 0;
   const comp = actx.createDynamicsCompressor();
-  master.connect(comp).connect(actx.destination);
+  duck = actx.createGain(); duck.gain.value = 1;   // 旁白播放時，音樂自動降低
+  master.connect(duck).connect(comp).connect(actx.destination);
   bus = actx.createGain();
   const verb = actx.createConvolver();
   const len = actx.sampleRate * 2.2, ir = actx.createBuffer(2, len, actx.sampleRate);
@@ -1006,6 +1012,7 @@ function updateSound(dt, now) {
     L.upX.value = upv.x; L.upY.value = upv.y; L.upZ.value = upv.z;
   } else { L.setPosition(eye.x, eye.y, eye.z); L.setOrientation(fwd.x, fwd.y, fwd.z, upv.x, upv.y, upv.z); }
 
+  duck.gain.setTargetAtTime(actx.currentTime < voiceUntil ? 0.45 : 1, actx.currentTime, 0.4);
   audioTick -= dt;
   const wf = zoneWeight('forest', eye.y);
   if (audioTick <= 0) {
@@ -1089,9 +1096,9 @@ const SINK_EXHALE = 1.5;                         // 吐氣最大聲時額外的�
 const RISE_FROM = THREE.MathUtils.degToRad(3);   // 比平視稍微抬頭 3 度就開始上浮
 const RISE_FULL = THREE.MathUtils.degToRad(15);  // 抬頭 15 度時上浮最快
 const RISE_MAX = 1.5;                            // 最快上浮速度
-const LOOK_SINK_FROM = THREE.MathUtils.degToRad(10);  // 往下看超過 10 度開始下沉
-const LOOK_SINK_FULL = THREE.MathUtils.degToRad(35);  // 往下看 35 度時下沉最快
-const LOOK_SINK_MAX = 1.3;                            // 往下看的最快下沉速度
+const LOOK_SINK_FROM = THREE.MathUtils.degToRad(12);  // 往下看超過 12 度開始下沉
+const LOOK_SINK_FULL = THREE.MathUtils.degToRad(40);  // 往下看 40 度時下沉最快
+const LOOK_SINK_MAX = 0.6;                            // 往下看的最快下沉速度
 const OCEAN_BOOST = 1.2;                              // 在海洋層時，上下移動再加快（最多 2.2 倍）
 function updateMove(dt, t, ending) {
   const head = camera.position;
@@ -1204,7 +1211,8 @@ renderer.setAnimationLoop(() => {
   gridFade = Math.min(gridFade, (1 - smooth(6, 20, tRun)) * (1 - smooth(2, 8, eye.distanceTo(gc))));
   if (!running) gridFade = 1;
   gridMat.opacity = 0.3 * gridFade;
-  for (const g of codeRings) { g.position.x = eye.x; g.position.z = eye.z; }  // 程式碼環永遠以體驗者為中心
+  const kRing = 1 - Math.exp(-dt / 8);   // 程式碼環慢慢跟上體驗者：移動時看得到相對位移，停下來後又回到中心
+  for (const g of codeRings) { g.position.x += (eye.x - g.position.x) * kRing; g.position.z += (eye.z - g.position.z) * kRing; }
   if (actx && running) updateSound(dt, now);
   renderer.render(scene, camera);
 });
@@ -1294,7 +1302,7 @@ function begin() {
   rig.position.copy(START); state.vel.set(0, 0, 0); state.lungs = 0.62;
   camera.rotation.set(0, 0, 0);
   running = true; tStart = clock.elapsedTime; updatePixelScale();
-  if (actx) { actx.resume(); master.gain.cancelScheduledValues(actx.currentTime); master.gain.setTargetAtTime(0.45, actx.currentTime, 1.5); }
+  if (actx) { actx.resume(); master.gain.cancelScheduledValues(actx.currentTime); master.gain.setTargetAtTime(1.1, actx.currentTime, 1.5); }
 }
 function finish() {
   finished = true; running = false;
