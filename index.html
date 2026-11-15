@@ -297,12 +297,23 @@ function lineSet(pairs, color, opacity, fog = true) {
 
 // 彎曲、分岔的枝幹生成器（樹與根共用）
 function grow(tubes, lines, nodes, from, dir, len, rad, depth, o) {
+  if (o.strands && depth < o.strandDepth) return growStrands(tubes, lines, nodes, from, dir, len, rad, depth, o);
   let p = from.clone(); const d = dir.clone();
   for (let s = 0; s < 3; s++) {
     d.add(randInSphere(o.wiggle)); d.y += o.up; d.normalize();
     const q = p.clone().addScaledVector(d, len / 3);
-    tubes.seg(p, q, rad * (1 - s * 0.12), rad * (1 - (s + 1) * 0.12), o.sides, depth / o.maxDepth, (depth + 0.3) / o.maxDepth);
+    let r0 = rad * (1 - s * 0.12), r1 = rad * (1 - (s + 1) * 0.12);
+    if (o.flare && depth === 0 && s === 0) r0 = rad * o.flare;                 // 樹幹底部向外擴張
+    if (o.pointed && depth >= o.maxDepth && s === 2) r1 = 0.01;                // 枝條末端收成尖刺
+    tubes.seg(p, q, r0, r1, o.sides, depth / o.maxDepth, (depth + 0.3) / o.maxDepth);
     if (lines) lines.push([p, q]);
+    if (o.shards && lines && depth >= 1) {                                     // 沿著枝條長出的水晶碎片
+      for (let k = 0; k < o.shards; k++) {
+        const a = p.clone().lerp(q, rnd());
+        const out = randInSphere(1).add(d.clone().multiplyScalar(0.6)).normalize();
+        lines.push([a, a.clone().addScaledVector(out, len / 3 * rand(0.25, 0.7))]);
+      }
+    }
     p = q;
   }
   if (nodes) nodes.push(p.clone());
@@ -320,16 +331,71 @@ function grow(tubes, lines, nodes, from, dir, len, rad, depth, o) {
   }
 }
 
+// 樹幹與主枝：不是單一圓筒，而是幾股互相扭轉的纖維束，底部向外散開
+function growStrands(tubes, lines, nodes, from, dir, len, rad, depth, o) {
+  const C = [from.clone()]; let p = from.clone(); const d = dir.clone();
+  for (let s = 0; s < 3; s++) { d.add(randInSphere(o.wiggle)); d.y += o.up; d.normalize(); p = p.clone().addScaledVector(d, len / 3); C.push(p); }
+  const P = []; for (let i = 0; i < 3; i++) for (let k = 0; k < 5; k++) P.push(C[i].clone().lerp(C[i + 1], k / 5)); P.push(C[3]);
+  const ref = Math.abs(dir.y) < 0.9 ? V(0, 1, 0) : V(1, 0, 0);
+  const frame = (i) => {
+    const tg = (i < P.length - 1 ? V(0, 0, 0).subVectors(P[i + 1], P[i]) : V(0, 0, 0).subVectors(P[i], P[i - 1])).normalize();
+    const u = V(0, 0, 0).crossVectors(tg, ref).normalize(), w = V(0, 0, 0).crossVectors(tg, u);
+    return [u, w];
+  };
+  const n = depth === 0 ? o.strands : Math.max(3, o.strands - 3);
+  // 半透明的內芯
+  for (let i = 0; i < P.length - 1; i++) {
+    const t0 = i / (P.length - 1), t1 = (i + 1) / (P.length - 1);
+    tubes.seg(P[i], P[i + 1], rad * 0.42 * (1 - 0.3 * t0), rad * 0.42 * (1 - 0.3 * t1), 7, depth / o.maxDepth, depth / o.maxDepth);
+  }
+  for (let j = 0; j < n; j++) {
+    const phase = (j / n) * TAU + rand(-0.3, 0.3), orbit = rad * rand(0.5, 0.75), rs = rad * rand(0.24, 0.36);
+    const twist = o.twist * (rnd() < 0.5 ? 1 : 1.25), wob = rand(0, TAU);
+    let prev = null, prevR = 0;
+    for (let i = 0; i < P.length; i++) {
+      const t = i / (P.length - 1), [u, w] = frame(i);
+      const ang = phase + t * twist * TAU;
+      const flare = depth === 0 ? 1 + (o.flare - 1) * Math.pow(1 - t, 3) * 1.6 : 1;
+      const r = orbit * flare * (1 - 0.3 * t) * (1 + 0.15 * Math.sin(t * 9 + wob));
+      const pt = P[i].clone().addScaledVector(u, Math.cos(ang) * r).addScaledVector(w, Math.sin(ang) * r);
+      if (depth === 0 && i === 0) pt.y -= 0.4;               // 底部的纖維往下鑽進地面
+      const cr = rs * (1 - 0.35 * t);
+      if (prev) {
+        tubes.seg(prev, pt, prevR, cr, 6, depth / o.maxDepth, (depth + t) / o.maxDepth);
+        if (lines) lines.push([prev, pt]);
+        if (o.shards && lines && rnd() < 0.35) {             // 纖維上的水晶碎片
+          const out = V(0, 0, 0).subVectors(pt, P[i]).normalize().add(randInSphere(0.6)).normalize();
+          lines.push([pt, pt.clone().addScaledVector(out, rad * rand(0.4, 1.1))]);
+        }
+      }
+      prev = pt; prevR = cr;
+    }
+  }
+  if (nodes) nodes.push(p.clone());
+  const kids = rnd() < 0.35 ? 3 : 2;
+  for (let k = 0; k < kids; k++) {
+    const nd = d.clone().add(randInSphere(o.spread)); nd.y += o.bias; nd.normalize();
+    grow(tubes, lines, nodes, p, nd, len * rand(0.66, 0.84), rad * rand(0.55, 0.72), depth + 1, o);
+  }
+}
+
 // =====================================================================
 //  中心：水晶般的枯樹，樹根在半透明地面下鏡像延伸
 // =====================================================================
 const crystal = new Tubes(), crystalLines = [], rootNodes = [];
-grow(crystal, crystalLines, null, V(0, 0, 0), V(0, 1, 0), 12, 2.1, 0,
-  { wiggle: 0.14, up: 0.1, spread: 0.85, bias: 0.22, sides: 10, maxDepth: 7, twigs: 4 });
+grow(crystal, crystalLines, null, V(0, 0, 0), V(0, 1, 0), 12, 2.8, 0,
+  { wiggle: 0.2, up: 0.03, spread: 1.25, bias: 0.07, sides: 10, maxDepth: 7, twigs: 3, flare: 1.7, pointed: true, shards: 2,
+    strands: 8, strandDepth: 2, twist: 0.45 });
+for (let i = 0; i < 7; i++) {   // 露出地面、向四周攤開的粗根
+  const a = (i / 7) * TAU + rand(-0.3, 0.3);
+  grow(crystal, crystalLines, rootNodes, V(Math.cos(a) * 1.5, 0.3, Math.sin(a) * 1.5), V(Math.cos(a), -0.12, Math.sin(a)).normalize(), rand(4, 6), rand(0.7, 1.0), 0,
+    { wiggle: 0.25, up: -0.03, spread: 0.7, bias: -0.12, sides: 7, maxDepth: 4, twigs: 2, pointed: true, shards: 1 });
+}
 grow(crystal, crystalLines, rootNodes, V(0, 0, 0), V(0, -1, 0), 9, 1.7, 0,
-  { wiggle: 0.42, up: -0.06, spread: 1.1, bias: -0.24, sides: 8, maxDepth: 7, twigs: 4 });
-crystal.build(crystalMat({ a: [0.12, 0.06, 0.06], b: [1.0, 0.72, 0.6], iri: 0.6, base: 0.07, shimmer: 0.5, far: 170 }));  // 從任何一層都看得到
-lineSet(crystalLines, 0xffd2bc, 0.55, false);   // 樹的「核心」與細絲
+  { wiggle: 0.42, up: -0.06, spread: 1.1, bias: -0.24, sides: 8, maxDepth: 7, twigs: 4, flare: 1.4, pointed: true });
+seed = 2026;   // 之後的森林配置用固定的種子，不受母樹形狀調整影響
+crystal.build(crystalMat({ a: [0.14, 0.05, 0.04], b: [1.0, 0.58, 0.45], iri: 0.35, base: 0.07, shimmer: 0.5, far: 170 }));  // 從任何一層都看得到
+lineSet(crystalLines, 0xffa588, 0.55, false);   // 樹的「核心」與細絲
 
 // 根的節點：遠看像星系，靠近像微生物
 const galaxy = new Pts();
@@ -1095,7 +1161,7 @@ const SINK_EXHALE = 1.5;                         // 吐氣最大聲時額外的�
 // 頭的角度以「開始時自然平視的角度」為準，所以每個人戴頭盔的習慣不同也沒關係
 const RISE_FROM = THREE.MathUtils.degToRad(3);   // 比平視稍微抬頭 3 度就開始上浮
 const RISE_FULL = THREE.MathUtils.degToRad(15);  // 抬頭 15 度時上浮最快
-const RISE_MAX = 1.5;                            // 最快上浮速度
+const RISE_MAX = 1.2;                            // 最快上浮速度
 const LOOK_SINK_FROM = THREE.MathUtils.degToRad(12);  // 往下看超過 12 度開始下沉
 const LOOK_SINK_FULL = THREE.MathUtils.degToRad(40);  // 往下看 40 度時下沉最快
 const LOOK_SINK_MAX = 0.6;                            // 往下看的最快下沉速度
